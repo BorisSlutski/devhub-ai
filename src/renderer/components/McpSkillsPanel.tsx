@@ -54,8 +54,14 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
   const [statuses, setStatuses] = useState<Record<string, 'ok' | 'error' | 'warning' | 'unknown'>>({})
 
   const refreshStatuses = useCallback(async () => {
-    const result = await window.api.mcpCheckStatus()
-    setStatuses(result)
+    try {
+      const result = await window.api.mcpCheckStatus()
+      if (result && typeof result === 'object') {
+        setStatuses(result)
+      }
+    } catch (err) {
+      console.error('[MCP-PANEL] mcpCheckStatus failed:', err)
+    }
   }, [])
 
   const refresh = useCallback(async () => {

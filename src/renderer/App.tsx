@@ -527,6 +527,7 @@ export function App() {
                           onOpenBrowser={() => handleOpenBrowser(project.id)}
                           onKillSystemProcess={(pid) => killSystemPortProcess(pid)}
                           onCheckoutBranch={(branch) => handleCheckoutBranch(project.id, branch)}
+                          onStartClaude={() => handleStartClaudeSession({ name: project.name, path: project.path, modifiedAt: '', gitBranch: null }, false)}
                         />
                       ))
                     )}

@@ -389,6 +389,14 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
     <div className="claude-sessions claude-sessions-horizontal">
       {/* Vertical sidebar */}
       <div className="claude-sessions-sidebar">
+        <div className="sidebar-header">
+          <span className="sidebar-header-label">Sessions</span>
+          <button
+            className="sidebar-new-btn"
+            onClick={onNewSession}
+            title="New Claude session"
+          >+</button>
+        </div>
         <div className="sidebar-session-list">
           {sessions.map((session) => {
             const isActive = activeSessionId === session.id
@@ -456,13 +464,6 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
             )
           })}
         </div>
-        <button
-          className="sidebar-new-session-btn"
-          onClick={onNewSession}
-          title="New Claude session"
-        >
-          + New Session
-        </button>
       </div>
 
       {/* Main area (toolbar + info bar + terminal) */}

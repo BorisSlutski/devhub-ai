@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { execFile } from 'child_process'
 
 export function registerMcpHandlers() {
+  console.log('[MCP] registerMcpHandlers called')
   ipcMain.handle('mcp-get-config', (_event, projectPath?: string) => {
     const configs: { scope: string; path: string; servers: Record<string, any> }[] = []
     const home = homedir()
@@ -97,14 +98,18 @@ export function registerMcpHandlers() {
   }
 
   ipcMain.handle('mcp-check-status', async () => {
+    console.log('[MCP] mcp-check-status called')
     // Return cached results if fresh enough
     if (mcpStatusCache && Date.now() - mcpStatusCache.timestamp < MCP_CACHE_TTL) {
+      console.log('[MCP] returning cached:', JSON.stringify(mcpStatusCache.results))
       return mcpStatusCache.results
     }
 
     // Deduplicate concurrent requests — only one `claude mcp list` at a time
     if (!mcpStatusPending) {
+      console.log('[MCP] spawning claude mcp list...')
       mcpStatusPending = runClaudeMcpList().then((results) => {
+        console.log('[MCP] claude mcp list returned:', JSON.stringify(results))
         mcpStatusCache = { results, timestamp: Date.now() }
         mcpStatusPending = null
         return results

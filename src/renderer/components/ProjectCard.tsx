@@ -19,6 +19,7 @@ interface Props {
   onOpenBrowser: () => void
   onKillSystemProcess: (pid: number) => void
   onCheckoutBranch: (branch: string) => void
+  onStartClaude: () => void
 }
 
 function timeAgo(dateStr: string | null): string {
@@ -35,7 +36,7 @@ function timeAgo(dateStr: string | null): string {
 
 export function ProjectCard({
   project, status, systemPortInfo, selected, keyboardFocused, currentBranch, branches,
-  onStart, onStop, onEdit, onRemove, onSelect, onOpenBrowser, onKillSystemProcess, onCheckoutBranch
+  onStart, onStop, onEdit, onRemove, onSelect, onOpenBrowser, onKillSystemProcess, onCheckoutBranch, onStartClaude
 }: Props) {
   const isRunning = status?.running ?? false
   const isSystemRunning = !isRunning && !!systemPortInfo
@@ -199,6 +200,7 @@ export function ProjectCard({
           </button>
         )}
         <button className="btn btn-sm" onClick={onEdit}>Edit</button>
+        <button className="btn btn-sm btn-claude" onClick={onStartClaude} title="Open in Claude">Claude</button>
       </div>
     </div>
   )

@@ -442,13 +442,11 @@ export function ChatInputBar({ sessionId, rootPath, onSend, onImageUpload, disab
     if (atMatch) {
       setAcType('file')
       const raw = atMatch[1]
-      // Strip leading / for the query (paths don't have leading /)
-      const q = raw.startsWith('/') ? raw.slice(1) : raw
       setAcQuery(raw.toLowerCase())
       setAcIndex(0)
 
       if (fileSearchTimer.current) clearTimeout(fileSearchTimer.current)
-      fileSearchTimer.current = setTimeout(() => searchFilesByName(q), q ? 150 : 0)
+      fileSearchTimer.current = setTimeout(() => searchFilesByName(raw), raw ? 150 : 0)
       return
     }
 
@@ -883,7 +881,9 @@ export function ChatInputBar({ sessionId, rootPath, onSend, onImageUpload, disab
             title={statusCfg.label + (detectedModel ? ` · ${detectedModel}` : '')}
           >
             <span className={`chat-input-status-dot ${sessionStatus}`}>{statusCfg.icon}</span>
-            {sessionStatus !== 'idle' && <span className="chat-input-status-text">{statusCfg.label}</span>}
+            <span className="chat-input-status-text" style={{ visibility: sessionStatus !== 'idle' ? 'visible' : 'hidden' }}>
+              {sessionStatus !== 'idle' ? statusCfg.label : 'Ready'}
+            </span>
           </span>
 
           {/* Mode selector */}

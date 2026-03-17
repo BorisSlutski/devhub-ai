@@ -37,12 +37,33 @@ export function registerFileHandlers() {
 
   ipcMain.handle('find-files-by-name', async (_event, rootPath: string, query: string) => {
     try {
-      const q = query.toLowerCase().trim()
-      const isPathQuery = q.includes('/')
+      const raw = query.toLowerCase().trim()
+      const isAbsoluteQuery = raw.startsWith('/')
       const results: { name: string; path: string; relativePath: string; isDir: boolean }[] = []
       const ignoreDirs = new Set(['node_modules', '.git', '.next', '.cache', '__pycache__', '.venv', 'venv', '.tox', '.mypy_cache', '.pytest_cache'])
       const MAX = 300
       const MAX_DEPTH = 12
+
+      // For absolute paths, resolve the deepest existing directory to walk from
+      let walkRoot = rootPath
+      let q = raw
+      let isPathQuery = raw.includes('/')
+
+      if (isAbsoluteQuery && raw.length > 1) {
+        const segments = raw.slice(1).split('/').filter(Boolean)
+        let bestRoot = '/'
+        let consumed = 0
+        for (let i = segments.length; i > 0; i--) {
+          const candidate = '/' + segments.slice(0, i).join('/')
+          try {
+            const s = statSync(candidate)
+            if (s.isDirectory()) { bestRoot = candidate; consumed = i; break }
+          } catch { continue }
+        }
+        walkRoot = bestRoot
+        q = segments.slice(consumed).join('/').toLowerCase()
+        isPathQuery = q.includes('/')
+      }
 
       const walk = (dir: string, depth: number) => {
         if (depth > MAX_DEPTH || results.length >= MAX) return
@@ -56,7 +77,7 @@ export function registerFileHandlers() {
               const s = statSync(fullPath)
               const isDir = s.isDirectory()
               if (isDir && ignoreDirs.has(entry)) continue
-              const rel = fullPath.replace(rootPath + '/', '')
+              const rel = fullPath.replace(walkRoot + '/', '')
               const relLower = rel.toLowerCase()
 
               let matches = false
@@ -69,7 +90,9 @@ export function registerFileHandlers() {
               }
 
               if (matches) {
-                results.push({ name: entry, path: fullPath, relativePath: rel, isDir })
+                // Return absolute paths for absolute queries so Claude can reference them correctly
+                const relativePath = isAbsoluteQuery ? fullPath : rel
+                results.push({ name: entry, path: fullPath, relativePath, isDir })
               }
               if (isDir) walk(fullPath, depth + 1)
             } catch { continue }
@@ -77,7 +100,7 @@ export function registerFileHandlers() {
         } catch { /* skip */ }
       }
 
-      walk(rootPath, 0)
+      walk(walkRoot, 0)
 
       if (q) {
         results.sort((a, b) => {

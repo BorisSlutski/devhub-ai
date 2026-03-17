@@ -343,11 +343,15 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
         const term = termRef.current
         const fitAddon = fitAddonRef.current
         if (!term || !fitAddon) return
-        const buf = term.buffer.active
-        const wasAtBottom = buf.viewportY >= buf.baseY
-        fitAddon.fit()
-        if (wasAtBottom) {
-          term.scrollToBottom()
+        // Use proposeDimensions to skip no-op fits (prevents flicker)
+        const dims = fitAddon.proposeDimensions()
+        if (dims && (dims.cols !== term.cols || dims.rows !== term.rows)) {
+          const buf = term.buffer.active
+          const wasAtBottom = buf.viewportY >= buf.baseY
+          fitAddon.fit()
+          if (wasAtBottom) {
+            term.scrollToBottom()
+          }
         }
         term.focus()
       }, 50)
@@ -358,7 +362,6 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
     <div
       ref={containerRef}
       className="xterminal-container"
-      style={{ width: '100%', height: '100%' }}
     />
   )
 }
