@@ -10,5 +10,4 @@ coverage/
 *.key
 *.cert
 *.p12
-package-lock.json
 test-results/
