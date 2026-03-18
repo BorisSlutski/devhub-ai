@@ -49,10 +49,13 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Run tests
         run: npm test
+
+      - name: Rebuild native modules for packaging
+        run: npx electron-rebuild -f -w node-pty
 
       - name: Package macOS app
         run: npm run package
