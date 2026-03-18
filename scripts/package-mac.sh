@@ -16,6 +16,7 @@ npx electron-vite build
 
 echo "Packaging $APP_NAME.app..."
 rm -rf "$APP_DIR"
+mkdir -p "$DIST_DIR"
 cp -R "$ELECTRON_APP" "$APP_DIR"
 
 # Rename the binary
