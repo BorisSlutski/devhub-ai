@@ -9,7 +9,7 @@ import type {
   SystemPortInfo, RtkStatus, RtkToggleResult, RtkGainStats,
   BrowserEvent, ActiveSession, ClaudeSessionInfo, SessionTitle,
   McpConfigEntry, SkillEntry, CreateCommandOptions, SaveTempImageOptions,
-  StatuslineData, RecoverableSession, ScrollbackRestoreResult,
+  StatuslineData, RecoverableSession, ScrollbackRestoreResult, ResourceSnapshot,
 } from '../shared/ipc-types'
 
 const api = {
@@ -225,6 +225,19 @@ const api = {
     ipcRenderer.invoke('session-history-scan', folderPath, folderName),
   sessionHistoryTitle: (claudeSessionId: string, dirName: string): Promise<SessionTitle | null> =>
     ipcRenderer.invoke('session-history-title', claudeSessionId, dirName),
+
+  // Resource monitoring
+  resourceGetSnapshot: (): Promise<ResourceSnapshot> =>
+    ipcRenderer.invoke('resource-get-snapshot'),
+  resourceSubscribe: (): Promise<void> =>
+    ipcRenderer.invoke('resource-subscribe'),
+  resourceUnsubscribe: (): Promise<void> =>
+    ipcRenderer.invoke('resource-unsubscribe'),
+  onResourceUpdate: (callback: (snapshot: ResourceSnapshot) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: ResourceSnapshot) => callback(snapshot)
+    ipcRenderer.on('resource-update', handler)
+    return () => ipcRenderer.removeListener('resource-update', handler)
+  },
 }
 
 contextBridge.exposeInMainWorld('api', api)

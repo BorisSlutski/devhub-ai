@@ -215,6 +215,18 @@ class PtyManager {
     }))
   }
 
+  /** Return a map of sessionId → PID for all active PTY sessions */
+  getSessionPids(): Map<string, number> {
+    const pids = new Map<string, number>()
+    for (const [id, session] of this.sessions) {
+      const pid = session.ptyProcess?.pid
+      if (typeof pid === 'number' && pid > 0) {
+        pids.set(id, pid)
+      }
+    }
+    return pids
+  }
+
   destroyAll() {
     for (const [id] of this.sessions) {
       this.destroySession(id)

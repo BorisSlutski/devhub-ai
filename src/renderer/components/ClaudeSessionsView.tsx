@@ -10,6 +10,9 @@ import { SessionInfoBar } from './SessionInfoBar'
 import { CoachPanel } from './CoachPanel'
 import { ChatInputBar } from './ChatInputBar'
 import { McpSkillsPanel } from './McpSkillsPanel'
+import { ResourceBadge } from './ResourceBadge'
+import { ResourcePanel } from './ResourcePanel'
+import { useResourceMonitor } from '../hooks/useResourceMonitor'
 import './ClaudeSessionsView.css'
 
 function formatTimeAgo(ts: number): string {
@@ -64,7 +67,7 @@ interface Props {
   onOpenPipelineSession?: (folderName: string, folderPath: string, worktreePath: string) => void
 }
 
-type SidePanel = 'none' | 'files' | 'file-view' | 'changes' | 'search' | 'browser' | 'pipeline' | 'coach' | 'mcp' | 'history'
+type SidePanel = 'none' | 'files' | 'file-view' | 'changes' | 'search' | 'browser' | 'pipeline' | 'coach' | 'mcp' | 'history' | 'resources'
 
 export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onNewSession, onCloseSession, onResumeSession, onResumeFromHistory, onOpenPipelineSession }: Props) {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
@@ -78,6 +81,7 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
   const [coachEnabled, setCoachEnabled] = useState(false)
   const [coachBadge, setCoachBadge] = useState(0)
   const [sessionTitles, setSessionTitles] = useState<Map<string, string>>(new Map())
+  const { snapshot: resourceSnapshot, getSessionMetrics, isLoading: resourceLoading } = useResourceMonitor()
   const dragging = useRef(false)
   const bodyRef = useRef<HTMLDivElement>(null)
 
@@ -238,6 +242,11 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
     setViewingFile(null)
   }, [])
 
+  const toggleResources = useCallback(() => {
+    setSidePanel(prev => prev === 'resources' ? 'none' : 'resources')
+    setViewingFile(null)
+  }, [])
+
   // Session history panel
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -291,6 +300,14 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
     } catch { setHistoryRecords([]) }
     setHistoryLoading(false)
   }, [sidePanel, sessions, activeSessionId])
+
+  const sessionNameMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const s of sessions) {
+      map.set(s.id, sessionTitles.get(s.id) || s.folderName)
+    }
+    return map
+  }, [sessions, sessionTitles])
 
   const filteredHistory = useMemo(() => {
     if (!historySearch.trim()) return historyRecords
@@ -433,6 +450,12 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
                   </div>
                 )}
                 <div className="sidebar-card-badges">
+                  {!isExited && (
+                    <ResourceBadge
+                      metrics={getSessionMetrics(session.id)}
+                      isLoading={resourceLoading}
+                    />
+                  )}
                   {!isExited && !isWaiting && (
                     <span className="sidebar-badge-thinking">
                       Thinking
@@ -488,6 +511,9 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
             </button>
             <button className={`claude-tb-icon ${sidePanel === 'mcp' ? 'active' : ''}`} onClick={toggleMcp} title="MCP & Skills">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M5 1a2 2 0 0 0-2 2v1H2a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h1v4a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9h1a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1h-1V3a2 2 0 0 0-2-2H5zm0 1h6a1 1 0 0 1 1 1v1H4V3a1 1 0 0 1 1-1zM2 5h12v3H2V5zm3 5h2v1H5v-1zm4 0h2v1H9v-1z"/></svg>
+            </button>
+            <button className={`claude-tb-icon ${sidePanel === 'resources' ? 'active' : ''}`} onClick={toggleResources} title="Resource Monitor">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1 13V3h1v8.293l3.146-3.147a.5.5 0 0 1 .708 0L8 10.293l4.146-4.147a.5.5 0 0 1 .708.708l-4.5 4.5a.5.5 0 0 1-.708 0L5.5 9.207 2.707 12H5v1H1zm13-10v7h-1V4.707L9.854 7.854a.5.5 0 0 1-.708-.708l3.5-3.5a.5.5 0 0 1 .708 0L14 3z"/></svg>
             </button>
             <span className="claude-tb-sep" />
             <button className={`claude-tb-icon ${sidePanel === 'files' || sidePanel === 'file-view' || sidePanel === 'changes' || sidePanel === 'search' ? 'active' : ''}`} onClick={toggleFiles} title="Files & Search">
@@ -570,7 +596,14 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
           <>
             <div className="side-resize-handle" onMouseDown={onDragStart} />
             <div className="claude-sessions-side" style={{ width: sideWidth }}>
-              {sidePanel === 'coach' ? (
+              {sidePanel === 'resources' ? (
+                <ResourcePanel
+                  snapshot={resourceSnapshot}
+                  isLoading={resourceLoading}
+                  sessionNames={sessionNameMap}
+                  onClose={() => setSidePanel('none')}
+                />
+              ) : sidePanel === 'coach' ? (
                 <CoachPanel
                   sessionId={activeSession.id}
                   onClose={() => setSidePanel('none')}

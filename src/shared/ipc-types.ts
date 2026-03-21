@@ -251,6 +251,31 @@ export interface SaveTempImageOptions {
   sessionId: string
 }
 
+// ── Resource monitoring ──
+
+export interface SessionMetrics {
+  sessionId: string
+  pid: number
+  cpu: number        // percentage (sum of process tree)
+  memory: number     // bytes (sum of RSS in process tree)
+  processCount: number // number of processes in tree
+}
+
+export interface HostMetrics {
+  totalMemory: number
+  freeMemory: number
+  usedMemory: number
+  memoryUsagePercent: number
+  cpuCores: number
+  loadAverage1m: number
+}
+
+export interface ResourceSnapshot {
+  timestamp: number
+  sessions: SessionMetrics[]
+  host: HostMetrics
+}
+
 // ── Re-exports for convenience ──
 
 export type {
