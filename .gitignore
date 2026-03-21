@@ -11,3 +11,4 @@ coverage/
 *.cert
 *.p12
 test-results/
+.claude/worktrees/
