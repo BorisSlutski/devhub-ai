@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { XTerminal } from './XTerminal'
+import { SessionSplitPane } from './split-pane'
 import { FileExplorer } from './FileExplorer'
 import { FileViewer } from './FileViewer'
 import { ChangesView } from './ChangesView'
@@ -84,6 +84,7 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
   const { snapshot: resourceSnapshot, getSessionMetrics, isLoading: resourceLoading } = useResourceMonitor()
   const dragging = useRef(false)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const splitPaneToolbarRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!rtkEnabled) { setRtkAvailable(false); return }
@@ -525,6 +526,8 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
             <button className={`claude-tb-icon ${sidePanel === 'pipeline' ? 'active' : ''}`} onClick={togglePipeline} title="CI Pipeline">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M6 2a.5.5 0 0 1 .47.33L10 11.44l1.53-3.82A.5.5 0 0 1 12 7.33h3.5a.5.5 0 0 1 0 1H12.3l-1.83 4.58a.5.5 0 0 1-.94 0L6 3.56l-1.53 3.82A.5.5 0 0 1 4 7.67H.5a.5.5 0 0 1 0-1h3.2L5.53 2.1A.5.5 0 0 1 6 2z"/></svg>
             </button>
+            <span className="claude-tb-sep" />
+            <div ref={splitPaneToolbarRef} className="claude-toolbar-icons" />
           </div>
         </div>
         {activeSession && (
@@ -555,10 +558,11 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, onN
                   flexShrink: 0
                 }} title="Dangerous mode — Claude executes commands without asking permission" />
               )}
-              <XTerminal
+              <SessionSplitPane
                 sessionId={session.id}
                 active={activeSessionId === session.id}
                 onWaitingChange={(waiting) => handleWaitingChange(session.id, waiting)}
+                toolbarRef={splitPaneToolbarRef}
               />
               {chatInputEnabled && activeSessionId === session.id && !session.exited && (
                 <ChatInputBar
