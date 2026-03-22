@@ -669,12 +669,63 @@ export function ChatInputBar({ sessionId, rootPath, onSend, onImageUpload, disab
     }
   }, [addImageFiles])
 
+  const [isDragOver, setIsDragOver] = useState(false)
+  const dragCounterRef = useRef(0)
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
-    if (e.dataTransfer?.files.length) {
-      addImageFiles(Array.from(e.dataTransfer.files))
+    setIsDragOver(false)
+    dragCounterRef.current = 0
+
+    const files = Array.from(e.dataTransfer?.files || [])
+
+    if (files.length > 0) {
+      const imageFiles: File[] = []
+      const filePaths: string[] = []
+
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          imageFiles.push(file)
+        } else {
+          const filePath = (file as any).path
+          if (filePath) filePaths.push(filePath)
+        }
+      }
+
+      if (imageFiles.length > 0) addImageFiles(imageFiles)
+
+      // Insert non-image file paths into text input
+      if (filePaths.length > 0) {
+        setText(prev => {
+          const needsSpace = prev.length > 0 && !prev.endsWith(' ')
+          return prev + (needsSpace ? ' ' : '') + filePaths.join(' ') + ' '
+        })
+        textareaRef.current?.focus()
+      }
+    } else {
+      // Text/plain drag (e.g. path from file explorer sidebar)
+      const path = e.dataTransfer?.getData('text/plain')
+      if (path) {
+        setText(prev => {
+          const needsSpace = prev.length > 0 && !prev.endsWith(' ')
+          return prev + (needsSpace ? ' ' : '') + path + ' '
+        })
+        textareaRef.current?.focus()
+      }
     }
   }, [addImageFiles])
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current++
+    setIsDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current--
+    if (dragCounterRef.current === 0) setIsDragOver(false)
+  }, [])
 
   const contextColor = contextPercent < 50 ? 'var(--green)' : contextPercent < COMPACT_THRESHOLD ? 'var(--orange)' : 'var(--red)'
   const statusCfg = STATUS_CONFIG[sessionStatus]
@@ -687,10 +738,19 @@ export function ChatInputBar({ sessionId, rootPath, onSend, onImageUpload, disab
 
   return (
     <div
-      className="chat-input-bar"
+      className={`chat-input-bar ${isDragOver ? 'chat-input-bar-dragover' : ''}`}
       onDrop={handleDrop}
       onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
     >
+      {/* Drop zone overlay */}
+      {isDragOver && (
+        <div className="chat-input-drop-overlay">
+          <div className="chat-input-drop-label">Drop files or paths here</div>
+        </div>
+      )}
+
       {/* Compact / summary suggestion banner */}
       {showCompactHint && (
         <div className="chat-compact-hint">

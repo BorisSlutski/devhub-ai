@@ -58,6 +58,15 @@
   color: var(--text-primary);
 }
 
+.fe-row[draggable="true"] {
+  cursor: grab;
+}
+
+.fe-row[draggable="true"]:active {
+  cursor: grabbing;
+  opacity: 0.6;
+}
+
 .fe-icon {
   width: 14px;
   text-align: center;

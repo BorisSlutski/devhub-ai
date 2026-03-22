@@ -42,6 +42,11 @@ function DirNode({ entry, onFileSelect, depth }: { entry: FileEntry; onFileSelec
         className="fe-row fe-dir"
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={toggle}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/plain', entry.path)
+          e.dataTransfer.effectAllowed = 'copy'
+        }}
       >
         <span className="fe-icon">{expanded ? '▾' : '▸'}</span>
         <span className="fe-name">{entry.name}</span>
@@ -55,6 +60,11 @@ function DirNode({ entry, onFileSelect, depth }: { entry: FileEntry; onFileSelec
             className="fe-row fe-file"
             style={{ paddingLeft: 8 + (depth + 1) * 14 }}
             onClick={() => onFileSelect(child.path)}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', child.path)
+              e.dataTransfer.effectAllowed = 'copy'
+            }}
           >
             <span className="fe-icon">·</span>
             <span className="fe-name">{child.name}</span>
@@ -103,6 +113,11 @@ export function FileExplorer({ rootPath, onFileSelect, onShowChanges, hasWorktre
                 className="fe-row fe-file"
                 style={{ paddingLeft: 8 }}
                 onClick={() => onFileSelect(entry.path)}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('text/plain', entry.path)
+                  e.dataTransfer.effectAllowed = 'copy'
+                }}
               >
                 <span className="fe-icon">·</span>
                 <span className="fe-name">{entry.name}</span>

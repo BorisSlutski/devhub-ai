@@ -33,6 +33,20 @@ const DARK_THEME = {
   brightWhite: '#ffffff',
 }
 
+/** Shell-escape a file path so spaces and special chars are safe for terminal paste */
+function shellEscapePath(p: string): string {
+  if (/^[a-zA-Z0-9._\-\/]+$/.test(p)) return p
+  return "'" + p.replace(/'/g, "'\\''") + "'"
+}
+
+function shellEscapePaths(paths: string[]): string {
+  return paths.map(shellEscapePath).join(' ')
+}
+
+function getFilePath(file: File): string {
+  return (file as any).path || ''
+}
+
 async function handleImageFile(file: File, sessionId: string): Promise<string | null> {
   const buffer = await file.arrayBuffer()
   const result = await window.api.saveTempImage({
@@ -279,10 +293,24 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
       e.stopPropagation()
       container?.classList.remove('xterminal-dragover')
 
-      if (!e.dataTransfer?.files.length) return
+      const files = Array.from(e.dataTransfer?.files || [])
 
-      for (const file of Array.from(e.dataTransfer.files)) {
-        if (file.type.startsWith('image/')) {
+      if (files.length > 0) {
+        // Separate image files from non-image files
+        const imageFiles: File[] = []
+        const nonImagePaths: string[] = []
+
+        for (const file of files) {
+          if (file.type.startsWith('image/')) {
+            imageFiles.push(file)
+          } else {
+            const filePath = getFilePath(file)
+            if (filePath) nonImagePaths.push(filePath)
+          }
+        }
+
+        // Handle image files — save and paste path
+        for (const file of imageFiles) {
           term.writeln(`\r\n\x1b[33m[Saving dropped image: ${file.name}...]\x1b[0m`)
           const imagePath = await handleImageFile(file, sessionId)
           if (imagePath) {
@@ -291,13 +319,17 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
           } else {
             term.writeln('\x1b[31m[Failed to save image]\x1b[0m')
           }
-        } else {
-          // Non-image file — just type the path
-          // For dragged local files, the path is available
-          const filePath = (file as any).path
-          if (filePath) {
-            window.api.ptyWrite(sessionId, filePath)
-          }
+        }
+
+        // Handle non-image files — shell-escape and paste paths
+        if (nonImagePaths.length > 0) {
+          window.api.ptyWrite(sessionId, shellEscapePaths(nonImagePaths))
+        }
+      } else {
+        // No files — check for text/plain (e.g. path dragged from file explorer)
+        const plainText = e.dataTransfer?.getData('text/plain')
+        if (plainText) {
+          window.api.ptyWrite(sessionId, shellEscapePaths([plainText]))
         }
       }
     }
