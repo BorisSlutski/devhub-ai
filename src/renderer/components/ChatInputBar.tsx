@@ -593,7 +593,7 @@ export function ChatInputBar({ sessionId, rootPath, onSend, onImageUpload, disab
       setEffortLevel(level)
       if (level === 'max') {
         setContextMaxTokens(1_000_000)
-        onSend('/effort high')
+        onSend('/effort max')
       } else {
         onSend(`/effort ${level}`)
       }
