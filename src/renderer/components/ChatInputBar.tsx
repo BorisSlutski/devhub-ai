@@ -259,9 +259,11 @@ export function ChatInputBar({ sessionId, rootPath, onSend, onImageUpload, disab
     window.api.skillsList(rootPath).then(setCustomSkills).catch(() => {})
   }, [rootPath])
 
-  // Ref for contextMaxTokens so the PTY listener doesn't re-subscribe on every change
+  // Refs so the PTY/statusline listeners don't re-subscribe on every change
   const contextMaxTokensRef = useRef(contextMaxTokens)
   contextMaxTokensRef.current = contextMaxTokens
+  const effortLevelRef = useRef(effortLevel)
+  effortLevelRef.current = effortLevel
 
   // PTY data listener — parse real-time context, status, model, cost
   useEffect(() => {
@@ -349,8 +351,8 @@ export function ChatInputBar({ sessionId, rootPath, onSend, onImageUpload, disab
         }
       }
 
-      // Context window
-      if (data.contextWindowSize != null && data.contextWindowSize >= 10_000) {
+      // Context window — don't override when Max effort is active (1M context)
+      if (data.contextWindowSize != null && data.contextWindowSize >= 10_000 && effortLevelRef.current !== 'max') {
         setContextMaxTokens(data.contextWindowSize)
       }
       if (data.contextUsedPercent != null) {
