@@ -62,11 +62,31 @@ jobs:
           cd dist
           zip -r -y "DevDock-mac-${VERSION}.zip" DevDock.app
 
+      - name: Create DMG
+        run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "DevDock" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "DevDock.app" 150 190 \
+            --app-drop-link 450 190 \
+            --no-internet-enable \
+            "dist/DevDock-mac-${VERSION}.dmg" \
+            "dist/DevDock.app" || true
+          # Fallback to hdiutil if create-dmg fails
+          if [ ! -f "dist/DevDock-mac-${VERSION}.dmg" ]; then
+            hdiutil create -volname "DevDock" -srcfolder "dist/DevDock.app" -ov -format UDZO "dist/DevDock-mac-${VERSION}.dmg"
+          fi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: DevDock-mac
-          path: dist/DevDock-mac-*.zip
+          path: |
+            dist/DevDock-mac-*.zip
+            dist/DevDock-mac-*.dmg
 
   release:
     needs: [check-version, build-mac]
@@ -91,4 +111,6 @@ jobs:
         with:
           tag_name: ${{ env.VERSION }}
           generate_release_notes: true
-          files: DevDock-mac-*.zip
+          files: |
+            DevDock-mac-*.zip
+            DevDock-mac-*.dmg

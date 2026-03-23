@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DevDock — The AI Terminal You've Been Missing</title>
 <meta name="description" content="DevDock is a native desktop environment for Claude Code. Multi-session terminals, autonomous pipelines, real-time context tracking, and browser automation. All in one window.">
+<meta property="og:title" content="DevDock — The AI Terminal You've Been Missing">
+<meta property="og:description" content="A native desktop environment for Claude Code. Multi-session terminals, autonomous pipelines, context tracking, and browser automation.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://shayko1.github.io/devdock/screenshots/launchpad-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="DevDock — The AI Terminal You've Been Missing">
+<meta name="twitter:description" content="A native desktop environment for Claude Code. Multi-session terminals, autonomous pipelines, and browser automation.">
+<meta name="twitter:image" content="https://shayko1.github.io/devdock/screenshots/launchpad-dark.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2300e5a0'/><text x='50' y='68' font-family='monospace' font-size='48' font-weight='bold' text-anchor='middle' fill='%23040610'>DD</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -201,6 +210,65 @@ nav {
   transform: translateY(-1px);
   box-shadow: 0 4px 20px var(--accent-glow);
   opacity: 1 !important;
+}
+
+.nav-download {
+  padding: 8px 20px;
+  background: transparent;
+  color: var(--text) !important;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  transition: border-color 0.2s, background 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.nav-download:hover {
+  border-color: var(--text-muted);
+  background: rgba(255,255,255,0.03);
+  opacity: 1 !important;
+}
+
+.btn-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 32px;
+  background: var(--accent);
+  color: var(--bg-deep);
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 15px;
+  font-family: var(--font-body);
+  border: none;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.3s;
+  letter-spacing: -0.01em;
+}
+.btn-download:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px var(--accent-glow);
+  opacity: 1;
+}
+.btn-download svg { flex-shrink: 0; }
+
+.download-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.download-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* ═══════════════════════════════════════════════
@@ -1031,7 +1099,8 @@ footer {
       <li><a href="#features">Features</a></li>
       <li><a href="#pipeline">Pipeline</a></li>
       <li><a href="#more">Capabilities</a></li>
-      <li><a href="https://github.com/shayko1/devdock" target="_blank" rel="noopener" class="nav-cta">View on GitHub</a></li>
+      <li><a href="https://github.com/shayko1/devdock" target="_blank" rel="noopener" class="nav-cta">GitHub</a></li>
+      <li><a href="https://github.com/shayko1/devdock/releases/latest" target="_blank" rel="noopener" class="nav-download">&#11015; Download</a></li>
     </ul>
   </div>
 </nav>
@@ -1055,10 +1124,21 @@ footer {
     </p>
 
     <div class="hero-actions reveal reveal-delay-3">
-      <a href="https://github.com/shayko1/devdock" target="_blank" rel="noopener" class="btn-primary">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-        View Source
+      <a href="https://github.com/shayko1/devdock/releases/latest" target="_blank" rel="noopener" class="btn-download">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download for macOS
       </a>
+      <a href="https://github.com/shayko1/devdock" target="_blank" rel="noopener" class="btn-secondary">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        View on GitHub
+      </a>
+    </div>
+    <div class="download-meta reveal reveal-delay-3">
+      <span>macOS 12+</span>
+      <span>&middot;</span>
+      <span>Apple Silicon & Intel</span>
+      <span>&middot;</span>
+      <span>Free & open source</span>
     </div>
 
     <!-- Terminal Mockup -->
@@ -1144,6 +1224,16 @@ footer {
           </div>
         </div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════ REAL SCREENSHOT ════════════ -->
+<section style="padding: 0 0 40px; margin-top: -40px;">
+  <div class="container" style="text-align: center;">
+    <p class="reveal" style="font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); margin-bottom: 20px; letter-spacing: 0.05em;">ACTUAL APP SCREENSHOT</p>
+    <div class="reveal reveal-delay-1" style="max-width: 1100px; margin: 0 auto; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); box-shadow: 0 24px 80px -12px rgba(0,0,0,0.5);">
+      <img src="screenshots/launchpad-dark.png" alt="DevDock Launchpad — manage and run all your projects" style="width: 100%; display: block;">
     </div>
   </div>
 </section>
@@ -1452,7 +1542,11 @@ footer {
       <h2 class="cta-title">Stop juggling<br>terminal tabs.</h2>
       <p class="cta-sub">DevDock is free, open source, and runs entirely on your machine. Your code never leaves your laptop.</p>
       <div class="hero-actions">
-        <a href="https://github.com/shayko1/devdock" target="_blank" rel="noopener" class="btn-primary">
+        <a href="https://github.com/shayko1/devdock/releases/latest" target="_blank" rel="noopener" class="btn-download">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download for macOS
+        </a>
+        <a href="https://github.com/shayko1/devdock" target="_blank" rel="noopener" class="btn-secondary">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
           Star on GitHub
         </a>
@@ -1526,7 +1620,9 @@ window.addEventListener('scroll', () => {
 // Smooth anchor scrolling
 document.querySelectorAll('a[href^="#"]').forEach(a => {
   a.addEventListener('click', (e) => {
-    const target = document.querySelector(a.getAttribute('href'));
+    const href = a.getAttribute('href');
+    if (href === '#') return;
+    const target = document.querySelector(href);
     if (target) {
       e.preventDefault();
       target.scrollIntoView({ behavior: 'smooth', block: 'start' });
