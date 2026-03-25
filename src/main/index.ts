@@ -1,3 +1,7 @@
+// Suppress EPIPE errors on stdout/stderr (happens when dev-mode pipes close)
+process.stdout?.on?.('error', () => {})
+process.stderr?.on?.('error', () => {})
+
 import { app, BrowserWindow, nativeImage, shell } from 'electron'
 import { join } from 'path'
 import { processManager, getShellPath } from './process-manager'
