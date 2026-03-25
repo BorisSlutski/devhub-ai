@@ -1,20 +1,63 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00e5a0"/>
-      <stop offset="100%" style="stop-color:#00b880"/>
+      <stop offset="0%" style="stop-color:#1e2433"/>
+      <stop offset="100%" style="stop-color:#0d1117"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#58a6ff"/>
+      <stop offset="50%" style="stop-color:#388bfd"/>
+      <stop offset="100%" style="stop-color:#58a6ff"/>
+    </linearGradient>
+    <linearGradient id="greenGlow" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#56d364"/>
+      <stop offset="100%" style="stop-color:#238636"/>
     </linearGradient>
     <filter id="shadow">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.2"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <filter id="innerGlow">
+      <feGaussianBlur stdDeviation="15" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
     </filter>
   </defs>
 
   <!-- Background rounded square -->
   <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
 
-  <!-- Subtle inner highlight -->
-  <rect x="4" y="4" width="1016" height="1016" rx="228" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="4"/>
+  <!-- Subtle border glow -->
+  <rect x="4" y="4" width="1016" height="1016" rx="228" fill="none" stroke="#58a6ff" stroke-width="2" opacity="0.2"/>
 
-  <!-- DD text -->
-  <text x="512" y="620" font-family="ui-monospace, 'SF Mono', 'Menlo', 'Monaco', monospace" font-size="520" font-weight="800" text-anchor="middle" fill="#04060a" filter="url(#shadow)" letter-spacing="-20">DD</text>
+  <!-- Ambient glow behind the D -->
+  <ellipse cx="512" cy="480" rx="260" ry="280" fill="#58a6ff" opacity="0.04"/>
+
+  <!-- Main "D" letterform - bold and modern -->
+  <g filter="shadow">
+    <!-- D shape - outer -->
+    <path d="M340 260 L340 740 L500 740 C660 740 740 640 740 500 C740 360 660 260 500 260 Z"
+          fill="none" stroke="url(#glow)" stroke-width="64" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+
+  <!-- Inner accent line on D -->
+  <path d="M372 320 L372 680 L490 680 C620 680 680 610 680 500 C680 390 620 320 490 320 Z"
+        fill="none" stroke="#58a6ff" stroke-width="8" opacity="0.15"/>
+
+  <!-- Dock dots at bottom -->
+  <g transform="translate(512, 860)">
+    <!-- Three project indicators -->
+    <circle cx="-60" cy="0" r="14" fill="#58a6ff" opacity="0.7"/>
+    <circle cx="0" cy="0" r="14" fill="url(#greenGlow)" opacity="0.9"/>
+    <circle cx="60" cy="0" r="14" fill="#bc8cff" opacity="0.7"/>
+
+    <!-- Running glow on green dot -->
+    <circle cx="0" cy="0" r="20" fill="none" stroke="#3fb950" stroke-width="2" opacity="0.4"/>
+  </g>
+
+  <!-- Small grid lines suggesting dashboard/projects inside the D -->
+  <g opacity="0.12">
+    <rect x="420" y="400" width="80" height="50" rx="6" fill="#58a6ff"/>
+    <rect x="520" y="400" width="80" height="50" rx="6" fill="#58a6ff"/>
+    <rect x="420" y="465" width="80" height="50" rx="6" fill="#58a6ff"/>
+    <rect x="520" y="465" width="80" height="50" rx="6" fill="#58a6ff"/>
+  </g>
 </svg>

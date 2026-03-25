@@ -426,11 +426,19 @@ export function App() {
         </div>
       </div>
 
-      {activeTab === 'db-access' ? (
+      {/* DB Access is always mounted so connection state survives tab switches */}
+      <div style={{
+        display: activeTab === 'db-access' ? 'flex' : 'none',
+        flex: 1,
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}>
         <ErrorBoundary name="DB Access">
           <DbWorkbenchView />
         </ErrorBoundary>
-      ) : activeTab === 'agents' ? (
+      </div>
+
+      {activeTab === 'db-access' ? null : activeTab === 'agents' ? (
         <ErrorBoundary name="Agents">
           <AgentsView />
         </ErrorBoundary>
