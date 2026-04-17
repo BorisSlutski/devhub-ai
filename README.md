@@ -79,16 +79,18 @@ Embedded terminal sessions running the Claude CLI inside a real shell. Each sess
 
 | Capability | Description |
 |---|---|
-| **Chat input bar** | Cursor-style input with `@` file mentions, `/` slash commands, model & effort selectors, image upload, and context usage tracking |
+| **Chat input bar** | Cursor-style input with `@` file mentions, `/` slash commands, model & effort selectors, image upload, and context usage tracking. Model picker includes **Claude Opus 4.7**, **Sonnet 4.6**, **Opus 4.6**, and **Haiku 4.5** |
 | **Session history** | Browse, search, and resume past conversations with auto-generated titles and keyword tags — keeps 6 months of history |
 | **Auto-recap on resume** | Resuming a session automatically asks Claude to summarize what happened so you can pick up where you left off |
+| **Full state persistence** | DevDock remembers the last active tab, project, and Claude session so you reopen exactly where you left off |
+| **Waiting indicators** | A pulsing dot appears on the session card and Claude tab when an agent is idle and waiting for your input — never miss a prompt |
 | **Git worktrees** | Every session gets an isolated branch — no conflicts with your main work. Worktree sessions resume into the correct directory |
 | **File explorer & search** | Browse project files and search content in a unified side panel |
 | **Diff viewer** | Review all changes Claude made before committing |
 | **MCP & Skills panel** | View and manage MCP servers, skills, and custom commands |
 | **Browser panel** | View web pages inline without switching windows |
 | **Pipeline** | Autonomous task execution: plan → implement → validate → review |
-| **Prompt Coach** | Context-aware suggestions to get better results from Claude (uses OpenAI, configurable) |
+| **Prompt Enhancer** | AI-powered prompt improvement — rewrite a rough idea into a focused, context-aware prompt before sending (uses OpenAI, configurable) |
 
 ---
 
@@ -103,6 +105,17 @@ Automatically discovers Claude-powered agents from `~/.claude/scripts` and macOS
 <img src="docs/screenshots/agents-tab.png" width="800" alt="Agents tab showing a grid of automated agents with status badges and logs" />
 </div>
 </details>
+
+---
+
+### DB Access
+
+A built-in MySQL workbench tab that opens read-only tunnels through [Akeyless](https://www.akeyless.io/) and lets you query production and staging databases without leaving DevDock. Pick a profile, run SQL, and view results in a clean grid — all credentials stay scoped to the tunnel lifetime.
+
+**Highlights:**
+- One-click tunnel management per Akeyless profile
+- SQL editor with query history and result pagination
+- Safe defaults (read-only unless explicitly toggled)
 
 ---
 
@@ -188,6 +201,7 @@ cp -R dist/DevDock.app /Applications/
 | `Cmd+2` | All Folders tab |
 | `Cmd+3` | Claude tab |
 | `Cmd+4` | Agents tab |
+| `Cmd+5` | DB Access tab |
 | `Esc` | Close modal / exit mode |
 | `?` | Show shortcuts help |
 | `Cmd++ / Cmd+-` | Zoom terminal font |
@@ -205,10 +219,11 @@ src/
 │   ├── scanner.ts         # Project discovery & tech detection
 │   ├── process-manager.ts # Start/stop project processes
 │   ├── pty-manager.ts     # Terminal sessions via node-pty
-│   ├── session-history.ts # Session persistence, history scanning, title extraction
-│   ├── coach-manager.ts   # Prompt Coach (AI-powered suggestions)
+│   ├── session-history.ts # Session persistence, history scanning, title extraction, active-session tracking
+│   ├── prompt-enhancer.ts # Prompt Enhancer (AI-powered prompt rewriting)
 │   ├── pipeline-manager.ts# Autonomous task pipeline
 │   ├── browser-bridge.ts  # Browser control server
+│   ├── akeyless-db.ts     # DB Access — Akeyless tunnel & MySQL client
 │   └── agent-scanner.ts   # Agent discovery
 ├── preload/
 │   └── index.ts           # IPC bridge (contextBridge)
@@ -237,10 +252,10 @@ src/
 
 | Path | Purpose |
 |---|---|
-| `~/Library/Application Support/devdock/state.json` | Persisted app state |
-| `~/Library/Application Support/devdock/coach-config.json` | Prompt Coach configuration |
+| `~/Library/Application Support/devdock/state.json` | Persisted app state (active tab, selected project, projects list) |
+| `~/Library/Application Support/devdock/enhancer-config.json` | Prompt Enhancer configuration |
 | `~/.devdock/worktrees/` | Git worktrees for sessions & pipeline |
-| `~/.devdock/active-sessions.json` | Active session tracking for auto-resume |
+| `~/.devdock/active-sessions.json` | Active session tracking + last-active session id for auto-resume |
 | `~/.devdock/tmp-images/` | Browser bridge screenshots |
 | `~/.devdock/browser` | CLI helper script (auto-injected into PATH) |
 | `~/.claude/projects/` | Claude Code session history (read-only, scanned for session history) |
