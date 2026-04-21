@@ -1,18 +1,18 @@
-# DevDock — AI Terminal Environment
+# DevHub-AI — AI Terminal Environment
 
-You are running inside **DevDock**, an Electron-based development environment with an embedded terminal.
+You are running inside **DevHub-AI**, an Electron-based development environment with an embedded terminal.
 This file tells you what tools and capabilities are available in this session.
 
 ## Environment
 
 - **Terminal**: xterm-256color PTY (zsh -i) inside an Electron window
-- **Session ID**: Available as `$DEVDOCK_SESSION_ID`
+- **Session ID**: Available as `$DEVHUB_AI_SESSION_ID`
 - **Working directory**: This project's root (or a git worktree — see Git section)
 - **No GUI access**: `open` commands that launch macOS apps won't be visible — use `browser` instead
 
 ## Browser Tool
 
-You have a `browser` command on PATH for controlling a real browser window managed by DevDock.
+You have a `browser` command on PATH for controlling a real browser window managed by DevHub-AI.
 Always prefer this over `open` when you need to view or interact with web pages.
 
 ```
@@ -47,7 +47,7 @@ browser eval 'document.querySelectorAll("a").length'
 
 ## Git & Worktrees
 
-This session may be running in a **git worktree** — an isolated branch copy created by DevDock.
+This session may be running in a **git worktree** — an isolated branch copy created by DevHub-AI.
 If so, your CWD is the worktree directory, not the original repo.
 
 **Detect your context:**
@@ -58,9 +58,9 @@ git status                         # working tree status
 ```
 
 **Worktree conventions:**
-- Branch names follow the pattern `devdock/claude-<project>-<id>`
+- Branch names follow the pattern `devhub-ai/claude-<project>-<id>`
 - The original repo is untouched — commit freely in your worktree branch
-- When done, DevDock's UI can merge or create a PR from the session info bar
+- When done, DevHub-AI's UI can merge or create a PR from the session info bar
 
 **Best practices:**
 - Make small, focused commits with clear messages
@@ -72,7 +72,7 @@ git status                         # working tree status
 - This is a real interactive PTY — full readline, job control, and signal handling work
 - The terminal is rendered in xterm.js inside Electron — ANSI colors and cursor movement work normally
 - Long-running processes can be backgrounded: `npm run dev &`
-- DevDock monitors the terminal for idle state (waiting for your input)
+- DevHub-AI monitors the terminal for idle state (waiting for your input)
 
 **Avoid:**
 - `open <url>` for web pages — use `browser navigate` instead
@@ -84,4 +84,4 @@ git status                         # working tree status
 - **Multiple sessions** may be running in parallel — each has its own terminal and working directory
 - **Session history** is preserved — if this session ends, it can be resumed later
 - The info bar above the terminal shows: current branch, commit status, files changed, and git actions
-- Click the branch name in the info bar to switch branches from the DevDock UI
+- Click the branch name in the info bar to switch branches from the DevHub-AI UI

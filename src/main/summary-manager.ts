@@ -25,7 +25,7 @@ export interface SaveSummaryOptions {
   sessionPtyId: string | null
 }
 
-const BASE_DIR = join(homedir(), '.devdock', 'summaries')
+const BASE_DIR = join(homedir(), '.devhub-ai', 'summaries')
 const INDEX_FILE = join(BASE_DIR, 'index.json')
 
 class SummaryManager {

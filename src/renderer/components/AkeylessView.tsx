@@ -117,7 +117,7 @@ export function AkeylessView() {
     if (freshStatus.scriptExists) {
       command = `bash "${freshStatus.scriptPath}"`
     } else {
-      command = `echo ""; echo "\\033[1;33m[DevDock]\\033[0m db-akeyless-connect.sh not found."; echo ""; echo "Download it from:"; echo "  \\033[36mhttps://github.com/wix-private/dba-training-kit/releases/tag/db-akeyless-connectv2.0\\033[0m"; echo ""; echo "Then place it at: ~/Downloads/db-akeyless-connect.sh"; echo "And run:  chmod u+x ~/Downloads/db-akeyless-connect.sh"; echo ""; echo "Or if you have wixtaller:  wixtaller --components akeyless"; echo ""`
+      command = `echo ""; echo "\\033[1;33m[DevHub-AI]\\033[0m db-akeyless-connect.sh not found."; echo ""; echo "Download it from:"; echo "  \\033[36mhttps://github.com/wix-private/dba-training-kit/releases/tag/db-akeyless-connectv2.0\\033[0m"; echo ""; echo "Then place it at: ~/Downloads/db-akeyless-connect.sh"; echo "And run:  chmod u+x ~/Downloads/db-akeyless-connect.sh"; echo ""; echo "Or if you have wixtaller:  wixtaller --components akeyless"; echo ""`
     }
 
     try {

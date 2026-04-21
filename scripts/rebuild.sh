@@ -2,7 +2,7 @@
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="DevDock"
+APP_NAME="DevHub-AI"
 DIST_DIR="$PROJECT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 INSTALL_DIR="/Applications/$APP_NAME.app"
@@ -49,11 +49,11 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>DevDock</string>
+  <string>DevHub-AI</string>
   <key>CFBundleDisplayName</key>
-  <string>DevDock</string>
+  <string>DevHub-AI</string>
   <key>CFBundleIdentifier</key>
-  <string>com.devdock.app</string>
+  <string>com.devhub-ai.app</string>
   <key>CFBundleVersion</key>
   <string>1.0.0</string>
   <key>CFBundleShortVersionString</key>
@@ -61,9 +61,9 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleExecutable</key>
-  <string>DevDock</string>
+  <string>DevHub-AI</string>
   <key>CFBundleIconFile</key>
-  <string>DevDock.icns</string>
+  <string>DevHub-AI.icns</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>

@@ -24,7 +24,7 @@ vi.mock('crypto', () => ({
 
 import { PresetManager, SessionPreset, SessionPresetCreate } from './preset-manager'
 
-const PRESETS_PATH = '/tmp/test-home/.devdock/presets.json'
+const PRESETS_PATH = '/tmp/test-home/.devhub-ai/presets.json'
 
 function makePresetInput(overrides: Partial<SessionPresetCreate> = {}): SessionPresetCreate {
   return {

@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import { presetManager, SessionPreset, SessionPresetCreate } from '../preset-manager'
 import { ptyManager } from '../pty-manager'
 import { loadState } from '../store'
-import { ensureDevDockClaudeMd } from '../claude-md'
+import { ensureDevHubAIClaudeMd } from '../claude-md'
 import { statuslineWatcher } from '../statusline-watcher'
 import { execSync } from 'child_process'
 import { join } from 'path'
@@ -72,9 +72,9 @@ export function registerPresetHandlers() {
 
           const timestamp = Date.now().toString(36)
           const slug = preset.projectName.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()
-          const worktreeBase = join(homedir(), '.devdock', 'worktrees', slug)
+          const worktreeBase = join(homedir(), '.devhub-ai', 'worktrees', slug)
           worktreePath = join(worktreeBase, timestamp, 'worktree')
-          branchName = `devdock/claude-${slug}-${timestamp}`
+          branchName = `devhub-ai/claude-${slug}-${timestamp}`
 
           mkdirSync(join(worktreeBase, timestamp), { recursive: true })
           execSync(
@@ -90,7 +90,7 @@ export function registerPresetHandlers() {
 
     const sessionCwd = worktreePath || preset.projectPath
     const currentState = loadState()
-    ensureDevDockClaudeMd(sessionCwd, currentState.rtkEnabled)
+    ensureDevHubAIClaudeMd(sessionCwd, currentState.rtkEnabled)
 
     const permFlag = preset.dangerousMode ? ' --dangerously-skip-permissions' : ''
     const modelFlag = preset.model ? ` --model ${preset.model}` : ''

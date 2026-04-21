@@ -15,14 +15,14 @@ describe('shell-readiness', () => {
 
   describe('READINESS_MARKER constant', () => {
     it('is the expected OSC 777 escape sequence', () => {
-      expect(READINESS_MARKER).toBe('\x1b]777;devdock-shell-ready\x07')
+      expect(READINESS_MARKER).toBe('\x1b]777;devhub-ai-shell-ready\x07')
     })
   })
 
   describe('READINESS_COMMAND constant', () => {
     it('is a printf command that emits the marker', () => {
       expect(READINESS_COMMAND).toContain('printf')
-      expect(READINESS_COMMAND).toContain('777;devdock-shell-ready')
+      expect(READINESS_COMMAND).toContain('777;devhub-ai-shell-ready')
       expect(READINESS_COMMAND.endsWith('\n')).toBe(true)
     })
   })

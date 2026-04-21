@@ -2,7 +2,7 @@
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="DevDock"
+APP_NAME="DevHub-AI"
 DIST_DIR="$PROJECT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 ELECTRON_APP="$PROJECT_DIR/node_modules/electron/dist/Electron.app"
@@ -24,7 +24,7 @@ mv "$APP_DIR/Contents/MacOS/Electron" "$APP_DIR/Contents/MacOS/$APP_NAME"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$APP_DIR/Contents/Info.plist" 2>/dev/null || true
 
-# Replace the default electron.icns with the DevDock icon so the dock/Finder
+# Replace the default electron.icns with the DevHub-AI icon so the dock/Finder
 # shows the right artwork. Info.plist still points at electron.icns, which is
 # why we overwrite in place rather than renaming.
 if [ -f "$PROJECT_DIR/resources/icon.icns" ]; then
@@ -64,11 +64,11 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>DevDock</string>
+  <string>DevHub-AI</string>
   <key>CFBundleDisplayName</key>
-  <string>DevDock</string>
+  <string>DevHub-AI</string>
   <key>CFBundleIdentifier</key>
-  <string>com.devdock.app</string>
+  <string>com.devhub-ai.app</string>
   <key>CFBundleVersion</key>
   <string>1.0.0</string>
   <key>CFBundleShortVersionString</key>
@@ -76,9 +76,9 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleExecutable</key>
-  <string>DevDock</string>
+  <string>DevHub-AI</string>
   <key>CFBundleIconFile</key>
-  <string>DevDock.icns</string>
+  <string>DevHub-AI.icns</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>

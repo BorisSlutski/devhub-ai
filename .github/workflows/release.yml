@@ -60,33 +60,33 @@ jobs:
       - name: Create zip archive
         run: |
           cd dist
-          zip -r -y "DevDock-mac-${VERSION}.zip" DevDock.app
+          zip -r -y "DevHub-AI-mac-${VERSION}.zip" DevHub-AI.app
 
       - name: Create DMG
         run: |
           brew install create-dmg
           create-dmg \
-            --volname "DevDock" \
+            --volname "DevHub-AI" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
-            --icon "DevDock.app" 150 190 \
+            --icon "DevHub-AI.app" 150 190 \
             --app-drop-link 450 190 \
             --no-internet-enable \
-            "dist/DevDock-mac-${VERSION}.dmg" \
-            "dist/DevDock.app" || true
+            "dist/DevHub-AI-mac-${VERSION}.dmg" \
+            "dist/DevHub-AI.app" || true
           # Fallback to hdiutil if create-dmg fails
-          if [ ! -f "dist/DevDock-mac-${VERSION}.dmg" ]; then
-            hdiutil create -volname "DevDock" -srcfolder "dist/DevDock.app" -ov -format UDZO "dist/DevDock-mac-${VERSION}.dmg"
+          if [ ! -f "dist/DevHub-AI-mac-${VERSION}.dmg" ]; then
+            hdiutil create -volname "DevHub-AI" -srcfolder "dist/DevHub-AI.app" -ov -format UDZO "dist/DevHub-AI-mac-${VERSION}.dmg"
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DevDock-mac
+          name: DevHub-AI-mac
           path: |
-            dist/DevDock-mac-*.zip
-            dist/DevDock-mac-*.dmg
+            dist/DevHub-AI-mac-*.zip
+            dist/DevHub-AI-mac-*.dmg
 
   release:
     needs: [check-version, build-mac]
@@ -104,7 +104,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: DevDock-mac
+          name: DevHub-AI-mac
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -112,5 +112,5 @@ jobs:
           tag_name: ${{ env.VERSION }}
           generate_release_notes: true
           files: |
-            DevDock-mac-*.zip
-            DevDock-mac-*.dmg
+            DevHub-AI-mac-*.zip
+            DevHub-AI-mac-*.dmg

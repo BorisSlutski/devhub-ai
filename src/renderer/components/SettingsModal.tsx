@@ -157,7 +157,7 @@ export function SettingsModal({ currentPath, currentScanDepth, rtkEnabled, dange
             Workspace Path
           </label>
           <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-            The root directory that DevDock scans for projects and folders.
+            The root directory that DevHub-AI scans for projects and folders.
           </p>
           <div style={{ display: 'flex', gap: 8 }}>
             <input

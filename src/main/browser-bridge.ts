@@ -20,12 +20,12 @@ function getOrCreateBrowserWindow(sessionId: string): BrowserWindow {
   if (bw && !bw.isDestroyed()) return bw
 
   // Use a persistent partition so cookies/logins survive
-  const ses = session.fromPartition('persist:devdock-browser')
+  const ses = session.fromPartition('persist:devhub-ai-browser')
 
   bw = new BrowserWindow({
     width: 1024,
     height: 768,
-    title: `DevDock Browser — ${sessionId.slice(0, 12)}`,
+    title: `DevHub-AI Browser — ${sessionId.slice(0, 12)}`,
     webPreferences: {
       session: ses,
       contextIsolation: true,
@@ -81,7 +81,7 @@ async function executeCommand(sessionId: string, command: string, args: Record<s
       const img = await bw.webContents.capturePage()
       const pngBuffer = img.toPNG()
       // Save to temp file so Claude can read it
-      const tmpDir = join(homedir(), '.devdock', 'tmp-images')
+      const tmpDir = join(homedir(), '.devhub-ai', 'tmp-images')
       mkdirSync(tmpDir, { recursive: true })
       const filePath = join(tmpDir, `browser-${sessionId.slice(0, 8)}-${Date.now()}.png`)
       writeFileSync(filePath, pngBuffer)
@@ -170,7 +170,7 @@ async function executeCommand(sessionId: string, command: string, args: Record<s
 
     case 'getConsole': {
       // We'd need to have been capturing — return info about console capture
-      return { info: 'Console messages are forwarded to the DevDock panel in real-time' }
+      return { info: 'Console messages are forwarded to the DevHub-AI panel in real-time' }
     }
 
     case 'back': {
@@ -301,19 +301,19 @@ export function isBrowserOpenForSession(sessionId: string): boolean {
 }
 
 function writeBrowserHelper(port: number) {
-  const devdockDir = join(homedir(), '.devdock')
-  mkdirSync(devdockDir, { recursive: true })
+  const devhubAiDir = join(homedir(), '.devhub-ai')
+  mkdirSync(devhubAiDir, { recursive: true })
 
-  const scriptPath = join(devdockDir, 'browser')
+  const scriptPath = join(devhubAiDir, 'browser')
   const script = `#!/bin/bash
-# DevDock Browser Control - use from Claude terminal sessions
+# DevHub-AI Browser Control - use from Claude terminal sessions
 # Usage: browser <command> [args...]
 
 PORT=${port}
-SESSION_ID="\${DEVDOCK_SESSION_ID}"
+SESSION_ID="\${DEVHUB_AI_SESSION_ID}"
 
 if [ -z "$SESSION_ID" ]; then
-  echo "Error: DEVDOCK_SESSION_ID not set. Run this from a DevDock Claude session." >&2
+  echo "Error: DEVHUB_AI_SESSION_ID not set. Run this from a DevHub-AI Claude session." >&2
   exit 1
 fi
 
@@ -396,7 +396,7 @@ case "$CMD" in
       -d "{\\"sessionId\\":\\"$SESSION_ID\\",\\"command\\":\\"close\\",\\"args\\":{}}"
     ;;
   *)
-    echo "DevDock Browser Control"
+    echo "DevHub-AI Browser Control"
     echo ""
     echo "Commands:"
     echo "  open                        Open browser window"

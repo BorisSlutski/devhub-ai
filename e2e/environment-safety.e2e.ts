@@ -8,9 +8,9 @@ test.describe('Environment Safety & UX', () => {
     for (const tabName of tabs) {
       await page.locator('.tab', { hasText: tabName }).click()
       await page.waitForTimeout(200)
-      await expect(page).toHaveTitle(/DevDock/)
+      await expect(page).toHaveTitle(/DevHub-AI/)
       const title = await page.title()
-      expect(title).toContain('DevDock')
+      expect(title).toContain('DevHub-AI')
     }
     await app.close()
   })
@@ -22,9 +22,9 @@ test.describe('Environment Safety & UX', () => {
       await page.locator('.tab', { hasText: 'Launchpad' }).click()
     }
     await expect(page.locator('.tabs-bar')).toBeVisible()
-    await expect(page).toHaveTitle(/DevDock/)
+    await expect(page).toHaveTitle(/DevHub-AI/)
     const title = await page.title()
-    expect(title).toContain('DevDock')
+    expect(title).toContain('DevHub-AI')
     await app.close()
   })
 
@@ -94,7 +94,7 @@ test.describe('Environment Safety & UX', () => {
       await expect(modal).not.toBeVisible()
     }
     await expect(page.locator('.tabs-bar')).toBeVisible()
-    await expect(page).toHaveTitle(/DevDock/)
+    await expect(page).toHaveTitle(/DevHub-AI/)
     await app.close()
   })
 })

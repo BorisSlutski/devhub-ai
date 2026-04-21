@@ -8,11 +8,11 @@ import { homedir } from 'os'
 
 // ── Socket & file paths ──
 
-const DEVDOCK_DIR = join(homedir(), '.devdock')
-export const SOCKET_PATH = join(DEVDOCK_DIR, 'daemon.sock')
-export const PID_FILE_PATH = join(DEVDOCK_DIR, 'daemon.pid')
-export const LOG_FILE_PATH = join(DEVDOCK_DIR, 'daemon.log')
-export const DEVDOCK_DIR_PATH = DEVDOCK_DIR
+const DEVHUB_AI_DIR = join(homedir(), '.devhub-ai')
+export const SOCKET_PATH = join(DEVHUB_AI_DIR, 'daemon.sock')
+export const PID_FILE_PATH = join(DEVHUB_AI_DIR, 'daemon.pid')
+export const LOG_FILE_PATH = join(DEVHUB_AI_DIR, 'daemon.log')
+export const DEVHUB_AI_DIR_PATH = DEVHUB_AI_DIR
 
 // ── PTY subprocess options ──
 

@@ -1,7 +1,7 @@
-# DevDock Terminal QA Plan
+# DevHub-AI Terminal QA Plan
 
 > **Version**: 1.0  
-> **Scope**: End-to-end quality assurance for the DevDock terminal experience, with emphasis on Claude-agent resilience, environment safety, and failure recovery.  
+> **Scope**: End-to-end quality assurance for the DevHub-AI terminal experience, with emphasis on Claude-agent resilience, environment safety, and failure recovery.  
 > **Audience**: Agents and engineers executing QA. Every test is written to be directly actionable.
 
 ---
@@ -799,7 +799,7 @@ These must ALL pass before any release. Failure in any blocks release.
 
 ### Log Location
 
-`~/.devdock/logs/devdock-YYYY-MM-DD.log` — rotated daily, max 7 days retention.
+`~/.devhub-ai/logs/devhub-ai-YYYY-MM-DD.log` — rotated daily, max 7 days retention.
 
 ### Debug Mode
 
@@ -814,7 +814,7 @@ Add a `--verbose` flag or Settings toggle for debug logging that includes:
 
 ### Recommendation: YES — Implement Dangerous Mode as Opt-In
 
-**Rationale**: DevDock currently launches Claude with `--dangerously-skip-permissions` unconditionally. This is the most permissive mode. The recommendation is to invert the default:
+**Rationale**: DevHub-AI currently launches Claude with `--dangerously-skip-permissions` unconditionally. This is the most permissive mode. The recommendation is to invert the default:
 
 ### Architecture
 

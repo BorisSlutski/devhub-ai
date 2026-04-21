@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="resources/icon.svg" width="128" height="128" alt="DevDock icon" />
+<img src="resources/logo.jpeg" width="600" alt="DevHub-AI" />
 
-# DevDock
+# DevHub-AI
 
 **Your local project command center for macOS.**
 
@@ -19,12 +19,12 @@ Manage every project, terminal session, and AI agent from a single native deskto
 ---
 
 <div align="center">
-<img src="docs/screenshots/launchpad-dark.png" width="860" alt="DevDock — Launchpad view showing project cards with tech stack, tags, and controls" />
+<img src="docs/screenshots/launchpad-dark.png" width="860" alt="DevHub-AI — Launchpad view showing project cards with tech stack, tags, and controls" />
 </div>
 
-## Why DevDock?
+## Why DevHub-AI?
 
-Most developers juggle a dozen tools just to keep their projects running: one terminal here, a browser tab there, an IDE somewhere else, and a half-forgotten `localhost:3000` that is still bound to a dead process. DevDock replaces that chaos with a single window.
+Most developers juggle a dozen tools just to keep their projects running: one terminal here, a browser tab there, an IDE somewhere else, and a half-forgotten `localhost:3000` that is still bound to a dead process. DevHub-AI replaces that chaos with a single window.
 
 - **See everything at a glance** — every project, its status, port, and tech stack on one screen
 - **Run Claude sessions with real terminals** — not a chat widget, a full `zsh` shell with `node-pty` and `xterm.js`
@@ -38,7 +38,7 @@ Most developers juggle a dozen tools just to keep their projects running: one te
 
 ### Launchpad
 
-Scan any directory and instantly see every project as a card. Each card shows the detected tech stack, custom tags, configured port, and live status. Start, stop, view logs, and open in your favorite editor — all without leaving DevDock.
+Scan any directory and instantly see every project as a card. Each card shows the detected tech stack, custom tags, configured port, and live status. Start, stop, view logs, and open in your favorite editor — all without leaving DevHub-AI.
 
 <details>
 <summary><strong>Screenshot — Launchpad with project grid</strong></summary>
@@ -82,7 +82,7 @@ Embedded terminal sessions running the Claude CLI inside a real shell. Each sess
 | **Chat input bar** | Cursor-style input with `@` file mentions, `/` slash commands, model & effort selectors, image upload, and context usage tracking. Model picker includes **Claude Opus 4.7**, **Sonnet 4.6**, **Opus 4.6**, and **Haiku 4.5** |
 | **Session history** | Browse, search, and resume past conversations with auto-generated titles and keyword tags — keeps 6 months of history |
 | **Auto-recap on resume** | Resuming a session automatically asks Claude to summarize what happened so you can pick up where you left off |
-| **Full state persistence** | DevDock remembers the last active tab, project, and Claude session so you reopen exactly where you left off |
+| **Full state persistence** | DevHub-AI remembers the last active tab, project, and Claude session so you reopen exactly where you left off |
 | **Waiting indicators** | A pulsing dot appears on the session card and Claude tab when an agent is idle and waiting for your input — never miss a prompt |
 | **Git worktrees** | Every session gets an isolated branch — no conflicts with your main work. Worktree sessions resume into the correct directory |
 | **File explorer & search** | Browse project files and search content in a unified side panel |
@@ -110,7 +110,7 @@ Automatically discovers Claude-powered agents from `~/.claude/scripts` and macOS
 
 ### DB Access
 
-A built-in MySQL workbench tab that opens read-only tunnels through [Akeyless](https://www.akeyless.io/) and lets you query production and staging databases without leaving DevDock. Pick a profile, run SQL, and view results in a clean grid — all credentials stay scoped to the tunnel lifetime.
+A built-in MySQL workbench tab that opens read-only tunnels through [Akeyless](https://www.akeyless.io/) and lets you query production and staging databases without leaving DevHub-AI. Pick a profile, run SQL, and view results in a clean grid — all credentials stay scoped to the tunnel lifetime.
 
 **Highlights:**
 - One-click tunnel management per Akeyless profile
@@ -121,7 +121,7 @@ A built-in MySQL workbench tab that opens read-only tunnels through [Akeyless](h
 
 ### Browser Bridge
 
-DevDock injects a `browser` CLI command into every Claude session. This gives Claude (or you) direct control over a real browser window — no Puppeteer setup, no boilerplate.
+DevHub-AI injects a `browser` CLI command into every Claude session. This gives Claude (or you) direct control over a real browser window — no Puppeteer setup, no boilerplate.
 
 ```bash
 browser navigate https://localhost:3000    # open a page
@@ -152,8 +152,8 @@ The browser window persists across commands and works with any local or remote U
 
 ```bash
 # Clone
-git clone https://github.com/anthropics/devdock.git
-cd devdock
+git clone https://github.com/BorisSlutski/devhub-ai.git
+cd devhub-ai
 
 # Install dependencies
 npm install
@@ -172,7 +172,7 @@ npm run build
 npm run package
 
 # Install to Applications
-cp -R dist/DevDock.app /Applications/
+cp -R dist/DevHub-AI.app /Applications/
 ```
 
 ---
@@ -184,11 +184,11 @@ cp -R dist/DevDock.app /Applications/
    npm install -g @anthropic-ai/claude-code
    ```
 
-2. **Set your workspace path** in the Launchpad tab (defaults to `~/Workspace`). DevDock scans this directory to discover projects.
+2. **Set your workspace path** in the Launchpad tab (defaults to `~/Workspace`). DevHub-AI scans this directory to discover projects.
 
 3. **Click Scan** to populate the project grid. Projects are detected by the presence of `package.json`, `Cargo.toml`, `pyproject.toml`, and similar manifest files.
 
-4. **Optional — add agents** by placing scripts in `~/.claude/scripts` or configuring macOS LaunchAgents. DevDock discovers and lists them automatically.
+4. **Optional — add agents** by placing scripts in `~/.claude/scripts` or configuring macOS LaunchAgents. DevHub-AI discovers and lists them automatically.
 
 ---
 
@@ -252,12 +252,12 @@ src/
 
 | Path | Purpose |
 |---|---|
-| `~/Library/Application Support/devdock/state.json` | Persisted app state (active tab, selected project, projects list) |
-| `~/Library/Application Support/devdock/enhancer-config.json` | Prompt Enhancer configuration |
-| `~/.devdock/worktrees/` | Git worktrees for sessions & pipeline |
-| `~/.devdock/active-sessions.json` | Active session tracking + last-active session id for auto-resume |
-| `~/.devdock/tmp-images/` | Browser bridge screenshots |
-| `~/.devdock/browser` | CLI helper script (auto-injected into PATH) |
+| `~/Library/Application Support/devhub-ai/state.json` | Persisted app state (active tab, selected project, projects list) |
+| `~/Library/Application Support/devhub-ai/enhancer-config.json` | Prompt Enhancer configuration |
+| `~/.devhub-ai/worktrees/` | Git worktrees for sessions & pipeline |
+| `~/.devhub-ai/active-sessions.json` | Active session tracking + last-active session id for auto-resume |
+| `~/.devhub-ai/tmp-images/` | Browser bridge screenshots |
+| `~/.devhub-ai/browser` | CLI helper script (auto-injected into PATH) |
 | `~/.claude/projects/` | Claude Code session history (read-only, scanned for session history) |
 
 ---
@@ -312,19 +312,19 @@ which claude
 <details>
 <summary><strong>Port already in use</strong></summary>
 
-DevDock detects port conflicts automatically. Check the project card status indicator and stop the conflicting process or change the port in the edit modal.
+DevHub-AI detects port conflicts automatically. Check the project card status indicator and stop the conflicting process or change the port in the edit modal.
 </details>
 
 <details>
 <summary><strong>Browser bridge not working</strong></summary>
 
-The `browser` command is only available inside Claude sessions started from the Claude tab. Ensure you're in a DevDock-managed session where the PATH has been configured.
+The `browser` command is only available inside Claude sessions started from the Claude tab. Ensure you're in a DevHub-AI-managed session where the PATH has been configured.
 </details>
 
 <details>
 <summary><strong>Sessions not resuming</strong></summary>
 
-Active sessions are tracked in `~/.devdock/active-sessions.json` and auto-resume on restart. Session history is read from Claude Code's own files in `~/.claude/projects/`. Ensure both paths are writable and not being cleared by cleanup tools.
+Active sessions are tracked in `~/.devhub-ai/active-sessions.json` and auto-resume on restart. Session history is read from Claude Code's own files in `~/.claude/projects/`. Ensure both paths are writable and not being cleared by cleanup tools.
 </details>
 
 ---

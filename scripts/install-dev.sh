@@ -2,13 +2,13 @@
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="DevDock"
+APP_NAME="DevHub-AI"
 APP_DIR="/Applications/$APP_NAME.app"
 ELECTRON_APP="$PROJECT_DIR/node_modules/electron/dist/Electron.app"
 
 if pgrep -f "$APP_DIR" > /dev/null 2>&1; then
-  echo "Closing running DevDock..."
-  osascript -e 'quit app "DevDock"' 2>/dev/null || true
+  echo "Closing running DevHub-AI..."
+  osascript -e 'quit app "DevHub-AI"' 2>/dev/null || true
   sleep 1
 fi
 
@@ -42,11 +42,11 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>DevDock</string>
+  <string>DevHub-AI</string>
   <key>CFBundleDisplayName</key>
-  <string>DevDock</string>
+  <string>DevHub-AI</string>
   <key>CFBundleIdentifier</key>
-  <string>com.devdock.app</string>
+  <string>com.devhub-ai.app</string>
   <key>CFBundleVersion</key>
   <string>1.0.0</string>
   <key>CFBundleShortVersionString</key>
@@ -54,9 +54,9 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleExecutable</key>
-  <string>DevDock</string>
+  <string>DevHub-AI</string>
   <key>CFBundleIconFile</key>
-  <string>DevDock.icns</string>
+  <string>DevHub-AI.icns</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>
@@ -71,7 +71,7 @@ echo ""
 echo "Done! Dev install complete."
 echo ""
 echo "From now on, to update the app:"
-echo "  npm run build        — rebuild, then relaunch DevDock"
+echo "  npm run build        — rebuild, then relaunch DevHub-AI"
 echo "  npm run build:watch  — auto-rebuild on file changes"
 echo ""
 echo "No more copying to /Applications needed!"

@@ -14,8 +14,8 @@ export interface ActiveSession {
   dangerousMode?: boolean
 }
 
-const DEVDOCK_DIR = join(homedir(), '.devdock')
-const ACTIVE_FILE = join(DEVDOCK_DIR, 'active-sessions.json')
+const DEVHUB_AI_DIR = join(homedir(), '.devhub-ai')
+const ACTIVE_FILE = join(DEVHUB_AI_DIR, 'active-sessions.json')
 
 interface ActiveSessionsFile {
   sessions: ActiveSession[]
@@ -45,7 +45,7 @@ class ActiveSessionStore {
 
   private save() {
     try {
-      mkdirSync(DEVDOCK_DIR, { recursive: true })
+      mkdirSync(DEVHUB_AI_DIR, { recursive: true })
       const payload: ActiveSessionsFile = { sessions: this.sessions, activeId: this.activeId }
       writeFileSync(ACTIVE_FILE, JSON.stringify(payload, null, 2), 'utf-8')
     } catch (err) {
@@ -131,7 +131,7 @@ function buildWorktreePathMap(): Map<string, string> {
   const map = new Map<string, string>()
   const home = homedir()
   const baseDirs = [
-    join(home, '.devdock', 'worktrees'),
+    join(home, '.devhub-ai', 'worktrees'),
     join(home, '.dev3.0', 'worktrees'),
   ]
 

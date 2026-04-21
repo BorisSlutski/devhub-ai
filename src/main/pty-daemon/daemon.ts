@@ -2,7 +2,7 @@
  * PTY Daemon — standalone Node.js process that manages PTY sessions.
  *
  * Runs independently from Electron. Clients connect via Unix socket at
- * ~/.devdock/daemon.sock using newline-delimited JSON.
+ * ~/.devhub-ai/daemon.sock using newline-delimited JSON.
  *
  * Each PTY session is isolated in its own forked child process for
  * crash isolation and resource management.
@@ -16,7 +16,7 @@ import {
   SOCKET_PATH,
   PID_FILE_PATH,
   LOG_FILE_PATH,
-  DEVDOCK_DIR_PATH,
+  DEVHUB_AI_DIR_PATH,
   parseMessages,
   serializeMessage,
   type DaemonCommand,
@@ -46,7 +46,7 @@ interface ManagedSession {
 let logStream: fs.WriteStream | null = null
 
 function initLogging(): void {
-  fs.mkdirSync(DEVDOCK_DIR_PATH, { recursive: true })
+  fs.mkdirSync(DEVHUB_AI_DIR_PATH, { recursive: true })
   logStream = fs.createWriteStream(LOG_FILE_PATH, { flags: 'a' })
 }
 
@@ -382,7 +382,7 @@ function cleanupSocketFile(): void {
 }
 
 function writePidFile(): void {
-  fs.mkdirSync(DEVDOCK_DIR_PATH, { recursive: true })
+  fs.mkdirSync(DEVHUB_AI_DIR_PATH, { recursive: true })
   fs.writeFileSync(PID_FILE_PATH, String(process.pid), 'utf-8')
 }
 
@@ -431,8 +431,8 @@ export function startDaemon(): void {
   initLogging()
   log('info', `Daemon starting, pid=${process.pid}`)
 
-  // Ensure ~/.devdock exists
-  fs.mkdirSync(DEVDOCK_DIR_PATH, { recursive: true })
+  // Ensure ~/.devhub-ai exists
+  fs.mkdirSync(DEVHUB_AI_DIR_PATH, { recursive: true })
 
   // Clean up stale socket file
   cleanupSocketFile()

@@ -1,6 +1,6 @@
-# Contributing to DevDock
+# Contributing to DevHub-AI
 
-Thanks for your interest in contributing! DevDock is an open-source project and we welcome pull requests from everyone.
+Thanks for your interest in contributing! DevHub-AI is an open-source project and we welcome pull requests from everyone.
 
 ## Getting Started
 
@@ -8,14 +8,14 @@ Thanks for your interest in contributing! DevDock is an open-source project and 
 
 - **Node.js** 18+
 - **npm** 9+
-- **macOS** 10.15+ (DevDock is a macOS Electron app)
+- **macOS** 10.15+ (DevHub-AI is a macOS Electron app)
 
 ### Setup
 
 ```bash
 # 1. Fork the repo on GitHub, then clone your fork
-git clone https://github.com/<your-username>/devdock.git
-cd devdock
+git clone https://github.com/<your-username>/devhub-ai.git
+cd devhub-ai
 
 # 2. Install dependencies
 npm install
@@ -91,10 +91,10 @@ src/
 
 ## Reporting Bugs
 
-Open an [issue](https://github.com/shayko1/devdock/issues) with:
+Open an [issue](https://github.com/BorisSlutski/devhub-ai/issues) with:
 - Steps to reproduce
 - Expected vs actual behavior
-- macOS version and DevDock version
+- macOS version and DevHub-AI version
 
 ## License
 

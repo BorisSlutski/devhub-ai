@@ -8,10 +8,10 @@
  */
 
 /** The OSC marker written by the shell to signal readiness */
-export const READINESS_MARKER = '\x1b]777;devdock-shell-ready\x07'
+export const READINESS_MARKER = '\x1b]777;devhub-ai-shell-ready\x07'
 
 /** The printf command injected into PTY stdin to emit the marker */
-export const READINESS_COMMAND = "printf '\\e]777;devdock-shell-ready\\007'\n"
+export const READINESS_COMMAND = "printf '\\e]777;devhub-ai-shell-ready\\007'\n"
 
 /** Default timeout before giving up on marker detection (ms) */
 const DEFAULT_TIMEOUT_MS = 15_000

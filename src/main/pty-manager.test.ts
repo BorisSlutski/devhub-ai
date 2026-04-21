@@ -146,7 +146,7 @@ describe('PtyManager', () => {
       const onDataCb = (mockPtyProcess as any)._onData
 
       // Simulate the shell emitting the readiness marker
-      onDataCb('\x1b]777;devdock-shell-ready\x07')
+      onDataCb('\x1b]777;devhub-ai-shell-ready\x07')
       mockPtyProcess.write.mockClear()
 
       ptyManager.write('s1', 'echo hi\n')
@@ -172,7 +172,7 @@ describe('PtyManager', () => {
   })
 
   describe('6. Environment', () => {
-    it('sets TERM, deletes CLAUDECODE, sets DEVDOCK_SESSION_ID in env', () => {
+    it('sets TERM, deletes CLAUDECODE, sets DEVHUB_AI_SESSION_ID in env', () => {
       const hadClaudecode = 'CLAUDECODE' in process.env
       process.env.CLAUDECODE = 'nested'
       try {
@@ -183,7 +183,7 @@ describe('PtyManager', () => {
         const env = spawnCall[2].env
         expect(env.TERM).toBe('xterm-256color')
         expect(env.CLAUDECODE).toBeUndefined()
-        expect(env.DEVDOCK_SESSION_ID).toBe('my-session-id')
+        expect(env.DEVHUB_AI_SESSION_ID).toBe('my-session-id')
         expect(env.DISABLE_AUTO_UPDATE).toBe('true')
       } finally {
         if (!hadClaudecode) delete process.env.CLAUDECODE
@@ -197,7 +197,7 @@ describe('PtyManager', () => {
 
       // The readiness printf command should be written immediately
       expect(mockPtyProcess.write).toHaveBeenCalledWith(
-        expect.stringContaining('777;devdock-shell-ready')
+        expect.stringContaining('777;devhub-ai-shell-ready')
       )
     })
 
@@ -207,7 +207,7 @@ describe('PtyManager', () => {
       mockPtyProcess.write.mockClear()
 
       // Simulate the shell emitting the readiness marker
-      onDataCb('\x1b]777;devdock-shell-ready\x07')
+      onDataCb('\x1b]777;devhub-ai-shell-ready\x07')
 
       // Allow the waitForReady promise to resolve
       await new Promise(resolve => setTimeout(resolve, 0))

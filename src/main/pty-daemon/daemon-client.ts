@@ -16,7 +16,7 @@ import * as path from 'path'
 import {
   SOCKET_PATH,
   PID_FILE_PATH,
-  DEVDOCK_DIR_PATH,
+  DEVHUB_AI_DIR_PATH,
   parseMessages,
   serializeMessage,
   type DaemonCommand,
@@ -275,7 +275,7 @@ export class DaemonClient {
   }
 
   private async startDaemon(): Promise<void> {
-    fs.mkdirSync(DEVDOCK_DIR_PATH, { recursive: true })
+    fs.mkdirSync(DEVHUB_AI_DIR_PATH, { recursive: true })
 
     // Clean up stale socket file if it exists
     try {

@@ -8,7 +8,7 @@ import { loadState } from '../store'
 import { cleanupSessionRtkFlag } from '../rtk-manager'
 import { promptEnhancer } from '../prompt-enhancer'
 import { activeSessions, scanProjectSessions, getSessionTitle } from '../session-history'
-import { ensureDevDockClaudeMd } from '../claude-md'
+import { ensureDevHubAIClaudeMd } from '../claude-md'
 import { statuslineWatcher } from '../statusline-watcher'
 import { workspaceInitTracker } from '../workspace-init-tracker'
 import { notificationManager } from '../notification-manager'
@@ -45,9 +45,9 @@ export function registerSessionHandlers() {
 
       const timestamp = Date.now().toString(36)
       const slug = projectName.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()
-      const worktreeBase = join(homedir(), '.devdock', 'worktrees', slug)
+      const worktreeBase = join(homedir(), '.devhub-ai', 'worktrees', slug)
       const worktreePath = join(worktreeBase, timestamp, 'worktree')
-      const branchName = `devdock/claude-${slug}-${timestamp}`
+      const branchName = `devhub-ai/claude-${slug}-${timestamp}`
 
       mkdirSync(join(worktreeBase, timestamp), { recursive: true })
 
@@ -63,9 +63,9 @@ export function registerSessionHandlers() {
         '#!/bin/zsh',
         'unset CLAUDECODE',
         `cd "${worktreePath}"`,
-        `echo "\\033[1;34m[DevDock]\\033[0m Worktree: ${worktreePath}"`,
-        `echo "\\033[1;34m[DevDock]\\033[0m Branch: ${branchName}"`,
-        `echo "\\033[1;34m[DevDock]\\033[0m Base: ${baseBranch}"`,
+        `echo "\\033[1;34m[DevHub-AI]\\033[0m Worktree: ${worktreePath}"`,
+        `echo "\\033[1;34m[DevHub-AI]\\033[0m Branch: ${branchName}"`,
+        `echo "\\033[1;34m[DevHub-AI]\\033[0m Base: ${baseBranch}"`,
         `echo ""`,
         `claude${wtPermFlag}`,
       ].join('\n'), { mode: 0o755 })
@@ -141,9 +141,9 @@ export function registerSessionHandlers() {
 
           const timestamp = Date.now().toString(36)
           const slug = opts.folderName.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()
-          const worktreeBase = join(homedir(), '.devdock', 'worktrees', slug)
+          const worktreeBase = join(homedir(), '.devhub-ai', 'worktrees', slug)
           worktreePath = join(worktreeBase, timestamp, 'worktree')
-          branchName = `devdock/claude-${slug}-${timestamp}`
+          branchName = `devhub-ai/claude-${slug}-${timestamp}`
 
           mkdirSync(join(worktreeBase, timestamp), { recursive: true })
 
@@ -196,7 +196,7 @@ export function registerSessionHandlers() {
 
     const sessionCwd = worktreePath || opts.folderPath
     const currentState = loadState()
-    ensureDevDockClaudeMd(sessionCwd, currentState.rtkEnabled)
+    ensureDevHubAIClaudeMd(sessionCwd, currentState.rtkEnabled)
 
     // Run workspace setup script if present
     runWorkspaceSetup(sessionCwd, opts.folderPath)
@@ -267,7 +267,7 @@ export function registerSessionHandlers() {
 
   ipcMain.handle('save-temp-image', (_event, opts: { name: string; data: number[]; sessionId: string }) => {
     try {
-      const tmpDir = join(homedir(), '.devdock', 'tmp-images')
+      const tmpDir = join(homedir(), '.devhub-ai', 'tmp-images')
       mkdirSync(tmpDir, { recursive: true })
       const ext = opts.name.split('.').pop() || 'png'
       const fileName = `${opts.sessionId.slice(0, 8)}-${Date.now()}.${ext}`
@@ -362,7 +362,7 @@ function cleanupPartialWorktree(worktreePath: string | null, folderPath: string)
 }
 
 function runWorkspaceSetup(sessionCwd: string, projectPath: string) {
-  const configPath = join(projectPath, '.devdock', 'config.json')
+  const configPath = join(projectPath, '.devhub-ai', 'config.json')
   if (!existsSync(configPath)) return
 
   try {
@@ -380,8 +380,8 @@ function runWorkspaceSetup(sessionCwd: string, projectPath: string) {
           stdio: ['ignore', 'pipe', 'pipe'],
           env: {
             ...process.env,
-            DEVDOCK_WORKSPACE_PATH: sessionCwd,
-            DEVDOCK_PROJECT_PATH: projectPath,
+            DEVHUB_AI_WORKSPACE_PATH: sessionCwd,
+            DEVHUB_AI_PROJECT_PATH: projectPath,
           }
         })
       } catch { /* setup script failed — non-fatal */ }

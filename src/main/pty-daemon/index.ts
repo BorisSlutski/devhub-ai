@@ -130,7 +130,7 @@ export class DaemonPtyManager {
 
     env.DISABLE_AUTO_UPDATE = 'true'
     env.DISABLE_UPDATE_PROMPT = 'true'
-    env.DEVDOCK_SESSION_ID = sessionId
+    env.DEVHUB_AI_SESSION_ID = sessionId
 
     const options: PtySpawnOptions = {
       shell: '/bin/zsh',

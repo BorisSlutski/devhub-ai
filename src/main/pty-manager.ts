@@ -77,15 +77,15 @@ class PtyManager {
     env.DISABLE_AUTO_UPDATE = 'true'
     env.DISABLE_UPDATE_PROMPT = 'true'
 
-    // Set DevDock browser bridge env vars
-    env.DEVDOCK_SESSION_ID = sessionId
+    // Set DevHub-AI browser bridge env vars
+    env.DEVHUB_AI_SESSION_ID = sessionId
     const port = getBridgePort()
     if (port > 0) {
-      env.DEVDOCK_BROWSER_PORT = String(port)
+      env.DEVHUB_AI_BROWSER_PORT = String(port)
     }
-    // Add devdock helper to PATH
-    const devdockBin = join(homedir(), '.devdock')
-    env.PATH = devdockBin + ':' + (env.PATH || '')
+    // Add devhub-ai helper to PATH
+    const devhubAiBin = join(homedir(), '.devhub-ai')
+    env.PATH = devhubAiBin + ':' + (env.PATH || '')
 
     let ptyProcess: any
     try {

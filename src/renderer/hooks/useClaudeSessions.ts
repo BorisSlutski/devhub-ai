@@ -56,7 +56,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
   useEffect(() => {
     if (autoResumeRef.current) return
     autoResumeRef.current = true
-    localStorage.removeItem('devdock-claude-sessions')
+    localStorage.removeItem('devhub-ai-claude-sessions')
 
     const restoreSessions = async () => {
       const saved = await window.api.activeSessionsGetAll()

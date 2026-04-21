@@ -5,7 +5,7 @@ test.describe('App Launch', () => {
   test('window opens with correct title', async () => {
     const { app, page } = await launchApp()
     const title = await page.title()
-    expect(title).toContain('DevDock')
+    expect(title).toContain('DevHub-AI')
     await app.close()
   })
 
@@ -13,7 +13,7 @@ test.describe('App Launch', () => {
     const { app, page } = await launchApp()
     const titlebar = page.locator('.titlebar')
     await expect(titlebar).toBeVisible()
-    await expect(titlebar).toContainText('DevDock')
+    await expect(titlebar).toContainText('DevHub-AI')
     await app.close()
   })
 

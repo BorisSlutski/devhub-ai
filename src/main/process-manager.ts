@@ -256,10 +256,10 @@ class ProcessManager {
 
     const initialLogs: string[] = []
     if (portChanged) {
-      initialLogs.push(`[DevDock] Port ${preferredPort} was busy, reassigned to ${assignedPort}`)
+      initialLogs.push(`[DevHub-AI] Port ${preferredPort} was busy, reassigned to ${assignedPort}`)
     }
-    initialLogs.push(`[DevDock] Running: ${actualCommand}`)
-    initialLogs.push(`[DevDock] Port: ${assignedPort} | PID: ${child.pid}`)
+    initialLogs.push(`[DevHub-AI] Running: ${actualCommand}`)
+    initialLogs.push(`[DevHub-AI] Port: ${assignedPort} | PID: ${child.pid}`)
 
     const managed: ManagedProcess = {
       process: child,
@@ -288,7 +288,7 @@ class ProcessManager {
           if (match) {
             const detectedPort = parseInt(match[1])
             if (detectedPort !== managed.port && detectedPort > 1000) {
-              appendLog(`[DevDock] Detected actual port: ${detectedPort} (expected ${managed.port})`)
+              appendLog(`[DevHub-AI] Detected actual port: ${detectedPort} (expected ${managed.port})`)
               managed.port = detectedPort
               this.emitStatus(project.id, true, child.pid ?? null, detectedPort, managed.logs)
             }

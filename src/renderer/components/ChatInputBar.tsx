@@ -173,7 +173,7 @@ export function ChatInputBar({ sessionId, rootPath, onSend, onImageUpload, disab
     sessionStatus: SessionStatus
   }
 
-  const CACHE_KEY = 'devdock-session-cache'
+  const CACHE_KEY = 'devhub-ai-session-cache'
   const loadPersistedCache = (): Map<string, SessionCache> => {
     try {
       const raw = localStorage.getItem(CACHE_KEY)

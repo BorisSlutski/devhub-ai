@@ -40,7 +40,7 @@ const DEFAULT_FLUSH_INTERVAL = 1000 // 1s
 const BUFFER_FLUSH_THRESHOLD = 64 * 1024 // 64KB
 
 /** Override in tests via setScrollbackBase() */
-let scrollbackBase = join(homedir(), '.devdock', 'scrollback')
+let scrollbackBase = join(homedir(), '.devhub-ai', 'scrollback')
 
 /** Set a custom base directory (for tests). */
 export function setScrollbackBase(dir: string): void {

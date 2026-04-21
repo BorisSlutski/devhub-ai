@@ -74,12 +74,12 @@ export function App() {
   const [showNewSession, setShowNewSession] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null)
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
-    return (localStorage.getItem('devdock-theme') as 'dark' | 'light' | 'system') || 'dark'
+    return (localStorage.getItem('devhub-ai-theme') as 'dark' | 'light' | 'system') || 'dark'
   })
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem('devdock-theme', theme)
+    localStorage.setItem('devhub-ai-theme', theme)
   }, [theme])
 
   const {
@@ -352,11 +352,11 @@ export function App() {
         padding: 40, textAlign: 'center', gap: 24,
       }}>
         <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em' }}>
-          <span style={{ opacity: 0.4, marginRight: 8 }}>DD</span>DevDock
+          <span style={{ opacity: 0.4, marginRight: 8 }}>DD</span>DevHub-AI
         </div>
         <p style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 420, lineHeight: 1.6 }}>
           Choose the root folder that contains your projects.
-          DevDock will scan it for repositories and workspaces.
+          DevHub-AI will scan it for repositories and workspaces.
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, width: '100%', maxWidth: 340 }}>
           <button
@@ -391,7 +391,7 @@ export function App() {
     <>
       <div className="titlebar">
         <span className="titlebar-logo">DD</span>
-        DevDock
+        DevHub-AI
         <div className="theme-switcher">
           <button className={`theme-btn ${theme === 'light' ? 'active' : ''}`} onClick={() => setTheme('light')} title="Light mode">☀</button>
           <button className={`theme-btn ${theme === 'dark' ? 'active' : ''}`} onClick={() => setTheme('dark')} title="Dark mode">☾</button>

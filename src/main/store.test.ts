@@ -8,7 +8,7 @@ import { join } from 'path'
 // Mock electron before imports
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn().mockReturnValue('/tmp/test-devdock-userData')
+    getPath: vi.fn().mockReturnValue('/tmp/test-devhub-ai-userData')
   }
 }))
 
@@ -21,7 +21,7 @@ vi.mock('fs', () => ({
 
 import { loadState, saveState } from './store'
 
-const storePath = '/tmp/test-devdock-userData/state.json'
+const storePath = '/tmp/test-devhub-ai-userData/state.json'
 
 describe('store', () => {
   beforeEach(() => {

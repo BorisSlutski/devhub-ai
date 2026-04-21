@@ -11,7 +11,7 @@ import {
 } from './scrollback-manager'
 
 // Unique temp dir per test run
-const TEST_ROOT = join(tmpdir(), `devdock-scrollback-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+const TEST_ROOT = join(tmpdir(), `devhub-ai-scrollback-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 let originalBase: string
 
 beforeEach(() => {

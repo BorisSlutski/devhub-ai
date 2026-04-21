@@ -49,7 +49,7 @@ export function NotificationSettings() {
               Suppress when focused
             </div>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-              Only notify when DevDock is in the background
+              Only notify when DevHub-AI is in the background
             </div>
           </div>
           <button

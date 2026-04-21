@@ -1,7 +1,7 @@
 {
-  "name": "devdock",
+  "name": "devhub-ai",
   "version": "1.0.0",
-  "description": "DevDock - Your local project command center",
+  "description": "DevHub-AI - Your local project command center",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

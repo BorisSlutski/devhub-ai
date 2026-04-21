@@ -24,7 +24,7 @@ export type SessionPresetCreate = Omit<SessionPreset, 'id' | 'createdAt' | 'useC
 const MAX_PRESETS = 50
 
 function getPresetsPath(): string {
-  const dir = join(homedir(), '.devdock')
+  const dir = join(homedir(), '.devhub-ai')
   mkdirSync(dir, { recursive: true })
   return join(dir, 'presets.json')
 }

@@ -51,7 +51,7 @@ async function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: 'DevDock',
+    title: 'DevHub-AI',
     titleBarStyle: 'hiddenInset',
     icon: iconPng,
     webPreferences: {

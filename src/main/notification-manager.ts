@@ -3,7 +3,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 
-const SETTINGS_PATH = join(homedir(), '.devdock', 'notification-settings.json')
+const SETTINGS_PATH = join(homedir(), '.devhub-ai', 'notification-settings.json')
 
 interface NotificationState {
   enabled: boolean
@@ -132,7 +132,7 @@ export class NotificationManager {
 
   private saveSettings(): void {
     try {
-      const dir = join(homedir(), '.devdock')
+      const dir = join(homedir(), '.devhub-ai')
       mkdirSync(dir, { recursive: true })
       writeFileSync(SETTINGS_PATH, JSON.stringify({
         enabled: this.enabled,

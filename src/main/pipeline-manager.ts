@@ -41,7 +41,7 @@ class PipelineManager {
   }
 
   private getConfigPath(): string {
-    const dir = join(homedir(), '.devdock')
+    const dir = join(homedir(), '.devhub-ai')
     mkdirSync(dir, { recursive: true })
     return join(dir, 'pipeline-configs.json')
   }
@@ -78,7 +78,7 @@ class PipelineManager {
   }
 
   private getRunsPath(): string {
-    const dir = join(homedir(), '.devdock')
+    const dir = join(homedir(), '.devhub-ai')
     mkdirSync(dir, { recursive: true })
     return join(dir, 'pipeline-runs.json')
   }
@@ -294,9 +294,9 @@ class PipelineManager {
   private createWorktree(folderPath: string, label: string): { worktreePath: string; branchName: string; baseBranch: string } {
     const timestamp = Date.now().toString(36)
     const slug = label.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()
-    const worktreeBase = join(homedir(), '.devdock', 'worktrees', slug)
+    const worktreeBase = join(homedir(), '.devhub-ai', 'worktrees', slug)
     const worktreePath = join(worktreeBase, `pipeline-${timestamp}`, 'worktree')
-    const branchName = `devdock/pipeline-${slug}-${timestamp}`
+    const branchName = `devhub-ai/pipeline-${slug}-${timestamp}`
 
     const baseBranch = this.getDefaultBranch(folderPath)
 
@@ -315,7 +315,7 @@ class PipelineManager {
       delete env.CLAUDECODE
 
       // Write prompt to a temp file to avoid stdin buffering issues with large prompts
-      const promptDir = join(homedir(), '.devdock', 'tmp')
+      const promptDir = join(homedir(), '.devhub-ai', 'tmp')
       mkdirSync(promptDir, { recursive: true })
       const promptFile = join(promptDir, `prompt-${runId}.txt`)
       writeFileSync(promptFile, prompt)

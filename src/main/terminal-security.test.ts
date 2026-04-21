@@ -48,18 +48,18 @@ function buildClaudeCommand(opts: {
 }
 
 /**
- * Prepares env as pty-manager does: remove CLAUDECODE, set DEVDOCK_SESSION_ID,
- * ensure PATH starts with ~/.devdock. Returns a new env object (does not mutate).
+ * Prepares env as pty-manager does: remove CLAUDECODE, set DEVHUB_AI_SESSION_ID,
+ * ensure PATH starts with ~/.devhub-ai. Returns a new env object (does not mutate).
  */
 function prepareSessionEnv(
   sessionId: string,
   baseEnv: Record<string, string>,
-  devdockBinPrefix: string
+  devhubAiBinPrefix: string
 ): Record<string, string> {
   const env: Record<string, string> = { ...baseEnv }
   delete env.CLAUDECODE
-  env.DEVDOCK_SESSION_ID = sessionId
-  env.PATH = devdockBinPrefix + ':' + (env.PATH || '')
+  env.DEVHUB_AI_SESSION_ID = sessionId
+  env.PATH = devhubAiBinPrefix + ':' + (env.PATH || '')
   return env
 }
 
@@ -304,38 +304,38 @@ describe('Session restoration preserves dangerousMode', () => {
 // ---------------------------------------------------------------------------
 describe('Environment variable safety', () => {
   describe('prepareSessionEnv', () => {
-    const devdockBin = '/home/user/.devdock'
+    const devhubAiBin = '/home/user/.devhub-ai'
 
     it('CLAUDECODE should be removed from env', () => {
       const base = { CLAUDECODE: '1', PATH: '/usr/bin' }
-      const result = prepareSessionEnv('claude-abc', base, devdockBin)
+      const result = prepareSessionEnv('claude-abc', base, devhubAiBin)
       expect(result.CLAUDECODE).toBeUndefined()
       expect('CLAUDECODE' in result).toBe(false)
     })
 
-    it('DEVDOCK_SESSION_ID should be set', () => {
+    it('DEVHUB_AI_SESSION_ID should be set', () => {
       const base = { PATH: '/usr/bin' }
-      const result = prepareSessionEnv('claude-xyz123', base, devdockBin)
-      expect(result.DEVDOCK_SESSION_ID).toBe('claude-xyz123')
+      const result = prepareSessionEnv('claude-xyz123', base, devhubAiBin)
+      expect(result.DEVHUB_AI_SESSION_ID).toBe('claude-xyz123')
     })
 
-    it('PATH should start with ~/.devdock', () => {
+    it('PATH should start with ~/.devhub-ai', () => {
       const base = { PATH: '/usr/bin:/usr/local/bin' }
-      const result = prepareSessionEnv('claude-abc', base, devdockBin)
-      expect(result.PATH).toMatch(/^\/home\/user\/\.devdock:/)
-      expect(result.PATH.startsWith(devdockBin + ':')).toBe(true)
+      const result = prepareSessionEnv('claude-abc', base, devhubAiBin)
+      expect(result.PATH).toMatch(/^\/home\/user\/\.devhub-ai:/)
+      expect(result.PATH.startsWith(devhubAiBin + ':')).toBe(true)
     })
 
     it('handles empty PATH gracefully', () => {
       const base = {}
-      const result = prepareSessionEnv('claude-abc', base, devdockBin)
-      expect(result.PATH).toBe(devdockBin + ':')
+      const result = prepareSessionEnv('claude-abc', base, devhubAiBin)
+      expect(result.PATH).toBe(devhubAiBin + ':')
     })
 
     it('does not mutate the base env object', () => {
       const base = { CLAUDECODE: '1', PATH: '/usr/bin' }
       const originalPath = base.PATH
-      prepareSessionEnv('claude-abc', base, devdockBin)
+      prepareSessionEnv('claude-abc', base, devhubAiBin)
       expect(base.CLAUDECODE).toBe('1')
       expect(base.PATH).toBe(originalPath)
     })

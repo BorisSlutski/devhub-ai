@@ -117,11 +117,11 @@ export function getRtkGainStats(): RtkGainStats | null {
   return { totalSaved, totalOriginal, totalCompressed, savingsPercent, commandCount, raw }
 }
 
-const SESSIONS_DIR = join(homedir(), '.devdock', 'rtk-sessions')
+const SESSIONS_DIR = join(homedir(), '.devhub-ai', 'rtk-sessions')
 
 /**
- * Write a wrapper script at ~/.devdock/rtk that checks a per-session
- * flag file. If the flag file exists for the current DEVDOCK_SESSION_ID,
+ * Write a wrapper script at ~/.devhub-ai/rtk that checks a per-session
+ * flag file. If the flag file exists for the current DEVHUB_AI_SESSION_ID,
  * the wrapper runs the command directly (bypassing RTK compression).
  * Otherwise it forwards to the real rtk binary.
  */
@@ -129,15 +129,15 @@ export function writeRtkWrapper(): boolean {
   const status = detectRtk()
   if (!status.installed || !status.path) return false
 
-  const devdockBin = join(homedir(), '.devdock')
-  mkdirSync(devdockBin, { recursive: true })
+  const devhubAiBin = join(homedir(), '.devhub-ai')
+  mkdirSync(devhubAiBin, { recursive: true })
   mkdirSync(SESSIONS_DIR, { recursive: true })
 
-  const wrapperPath = join(devdockBin, 'rtk')
+  const wrapperPath = join(devhubAiBin, 'rtk')
   const script = [
     '#!/bin/bash',
     `SESSIONS_DIR="${SESSIONS_DIR}"`,
-    'if [ -n "$DEVDOCK_SESSION_ID" ] && [ -f "$SESSIONS_DIR/$DEVDOCK_SESSION_ID.disabled" ]; then',
+    'if [ -n "$DEVHUB_AI_SESSION_ID" ] && [ -f "$SESSIONS_DIR/$DEVHUB_AI_SESSION_ID.disabled" ]; then',
     '  exec "$@"',
     'fi',
     `exec "${status.path}" "$@"`,

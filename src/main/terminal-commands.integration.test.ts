@@ -120,7 +120,7 @@ function runInteractive(opts?: {
 // Temp directory for each test
 let tempDir: string
 function makeTempDir(): string {
-  tempDir = mkdtempSync(join(tmpdir(), 'devdock-test-'))
+  tempDir = mkdtempSync(join(tmpdir(), 'devhub-ai-test-'))
   return tempDir
 }
 
@@ -138,8 +138,8 @@ function stripAnsi(str: string): string {
 // ─── BASIC COMMANDS ─────────────────────────────────────────────
 describe('Basic command execution', () => {
   it('echo prints output correctly', async () => {
-    const { output } = await runInPty('echo "HELLO_DEVDOCK_TEST"')
-    expect(output).toContain('HELLO_DEVDOCK_TEST')
+    const { output } = await runInPty('echo "HELLO_DEVHUB_AI_TEST"')
+    expect(output).toContain('HELLO_DEVHUB_AI_TEST')
   })
 
   it('pwd shows current directory', async () => {
@@ -159,9 +159,9 @@ describe('Basic command execution', () => {
 
   it('cat reads file content', async () => {
     const dir = makeTempDir()
-    writeFileSync(join(dir, 'hello.txt'), 'DEVDOCK_FILE_CONTENT_123')
+    writeFileSync(join(dir, 'hello.txt'), 'DEVHUB_AI_FILE_CONTENT_123')
     const { output } = await runInPty('cat hello.txt', { cwd: dir })
-    expect(output).toContain('DEVDOCK_FILE_CONTENT_123')
+    expect(output).toContain('DEVHUB_AI_FILE_CONTENT_123')
   })
 
   it('command exit code is 0 for success', async () => {
@@ -245,13 +245,13 @@ describe('Environment variables', () => {
   })
 
   it('sets and reads local env vars', async () => {
-    const { output } = await runInPty('MY_TEST_VAR="devdock_val_42" && echo $MY_TEST_VAR')
-    expect(output).toContain('devdock_val_42')
+    const { output } = await runInPty('MY_TEST_VAR="devhub-ai_val_42" && echo $MY_TEST_VAR')
+    expect(output).toContain('devhub-ai_val_42')
   })
 
   it('export makes var available to subprocesses', async () => {
     const { output } = await runInPty(
-      'export DEVDOCK_EXPORT_TEST="exported_val" && /bin/zsh -c \'echo $DEVDOCK_EXPORT_TEST\''
+      'export DEVHUB_AI_EXPORT_TEST="exported_val" && /bin/zsh -c \'echo $DEVHUB_AI_EXPORT_TEST\''
     )
     expect(output).toContain('exported_val')
   })
@@ -642,9 +642,9 @@ describe('Process and signal handling', () => {
   })
 })
 
-// ─── BRACKETED PASTE (DevDock ChatInputBar send mechanism) ──────
+// ─── BRACKETED PASTE (DevHub-AI ChatInputBar send mechanism) ──────
 describe('Bracketed paste input (ChatInputBar simulation)', () => {
-  // This is exactly how DevDock sends text from ChatInputBar to the PTY:
+  // This is exactly how DevHub-AI sends text from ChatInputBar to the PTY:
   // Step 1: \x1b[200~text\x1b[201~ (bracketed paste)
   // Step 2: \r (Enter key, sent separately)
 
@@ -665,7 +665,7 @@ describe('Bracketed paste input (ChatInputBar simulation)', () => {
     const pty = runInteractive()
     try {
       await pty.waitForOutput(/[\$%#>]/, 5000)
-      // Two writes: paste first, then \r after 50ms (current DevDock approach)
+      // Two writes: paste first, then \r after 50ms (current DevHub-AI approach)
       pty.write('\x1b[200~echo "BP_DELAYED_TEST"\x1b[201~')
       await new Promise(r => setTimeout(r, 50))
       pty.write('\r')

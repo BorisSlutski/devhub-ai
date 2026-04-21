@@ -2,7 +2,7 @@
 
 ## Overview
 
-Optional feature that runs an autonomous plan-implement-validate-review loop for coding tasks. User describes a task in the DevDock UI, and the pipeline works through it without intervention.
+Optional feature that runs an autonomous plan-implement-validate-review loop for coding tasks. User describes a task in the DevHub-AI UI, and the pipeline works through it without intervention.
 
 ## Architecture
 
@@ -48,4 +48,4 @@ Task Input (UI) -> Planner -> Implementer -> Validator -> Reviewer -> Done/Retry
 - `src/shared/pipeline-types.ts` — shared types
 - `src/main/pipeline-manager.ts` — orchestrator
 - `src/renderer/components/PipelineView.tsx` — UI
-- Config stored in `~/.devdock/pipeline-configs.json`
+- Config stored in `~/.devhub-ai/pipeline-configs.json`
