@@ -1,7 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { sql, MySQL } from '@codemirror/lang-sql'
 import { EditorView, keymap } from '@codemirror/view'
+import {
+  filterProducers,
+  listProducersForBrowse,
+  groupProducersByCluster,
+  duplicateDbNames,
+  shouldShowDatabaseSubtitle,
+} from '../../shared/db-picker'
 import './DbWorkbenchView.css'
 
 /* ── Local Types (no shared imports to avoid circular deps) ── */
@@ -117,6 +124,7 @@ export function DbWorkbenchView() {
   const [producers, setProducers] = useState<DbProducer[]>([])
   const [producersLoading, setProducersLoading] = useState(false)
   const [producerSearch, setProducerSearch] = useState('')
+  const [pickerMode, setPickerMode] = useState<'cluster' | 'database'>('cluster')
   const [selectedCluster, setSelectedCluster] = useState<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
@@ -142,6 +150,7 @@ export function DbWorkbenchView() {
   const openPicker = useCallback(async () => {
     setShowPicker(true)
     setProducerSearch('')
+    setPickerMode('cluster')
     setSelectedCluster(null)
     setProducersLoading(true)
     setConnectError(null)
@@ -168,8 +177,33 @@ export function DbWorkbenchView() {
     }
   }, [showPicker, producersLoading])
 
-  // Unique clusters sorted alphabetically
-  const clusters = [...new Set(producers.map((p) => p.cluster))].sort((a, b) => a.localeCompare(b))
+  const clusters = useMemo(
+    () => [...new Set(producers.map((p) => p.cluster))].sort((a, b) => a.localeCompare(b)),
+    [producers],
+  )
+
+  const searchActive = producerSearch.trim().length > 0
+  const globalSearchMatches = useMemo(
+    () => filterProducers(producers, producerSearch),
+    [producers, producerSearch],
+  )
+  const globalSearchGroups = useMemo(
+    () => groupProducersByCluster(globalSearchMatches),
+    [globalSearchMatches],
+  )
+
+  const databaseBrowseList = useMemo(
+    () => listProducersForBrowse(producers, producerSearch),
+    [producers, producerSearch],
+  )
+  const databaseBrowseGroups = useMemo(
+    () => groupProducersByCluster(databaseBrowseList),
+    [databaseBrowseList],
+  )
+  const databaseBrowseDupes = useMemo(
+    () => duplicateDbNames(databaseBrowseList),
+    [databaseBrowseList],
+  )
 
   const filteredClusters = clusters.filter((c) => {
     const q = producerSearch.toLowerCase()
@@ -177,17 +211,22 @@ export function DbWorkbenchView() {
     return c.toLowerCase().includes(q)
   })
 
-  // Databases within the selected cluster
-  const clusterDatabases = selectedCluster
-    ? producers
-        .filter((p) => p.cluster === selectedCluster)
-        .filter((p) => {
-          const q = producerSearch.toLowerCase()
-          if (!q) return true
-          return p.dbName.toLowerCase().includes(q)
-        })
-        .sort((a, b) => a.dbName.localeCompare(b.dbName))
-    : []
+  const clusterDatabases = useMemo(() => {
+    if (!selectedCluster) return []
+    return producers
+      .filter((p) => p.cluster === selectedCluster)
+      .filter((p) => {
+        const q = producerSearch.toLowerCase()
+        if (!q) return true
+        return (
+          p.dbName.toLowerCase().includes(q) ||
+          p.database.toLowerCase().includes(q)
+        )
+      })
+      .sort((a, b) => a.dbName.localeCompare(b.dbName))
+  }, [producers, selectedCluster, producerSearch])
+
+  const clusterDupes = useMemo(() => duplicateDbNames(clusterDatabases), [clusterDatabases])
 
   /* ── Connect / Disconnect ── */
 
@@ -393,6 +432,177 @@ export function DbWorkbenchView() {
     cmRunKeymap.current,
   ])
 
+  function renderProducerRow(p: DbProducer, dupes: Set<string>, showClusterInSubtitle: boolean) {
+    const showDbSubtitle = shouldShowDatabaseSubtitle(p, dupes) || showClusterInSubtitle
+    return (
+      <button
+        key={p.name}
+        className="dbw-picker-item"
+        onClick={() => handleConnect(p.name)}
+      >
+        <span className="dbw-picker-item-text">
+          <span className="dbw-picker-db-name">{p.dbName}</span>
+          {showDbSubtitle && (
+            <span className="dbw-picker-db-sub">
+              {showClusterInSubtitle ? `${p.cluster} · ${p.database}` : p.database}
+            </span>
+          )}
+        </span>
+      </button>
+    )
+  }
+
+  function renderPickerModal() {
+    const showingDatabases = pickerMode === 'cluster' && selectedCluster !== null
+    const showingGlobalSearch =
+      pickerMode === 'cluster' && searchActive && !showingDatabases
+    const showingDatabaseBrowse = pickerMode === 'database'
+    const globalDupes = duplicateDbNames(globalSearchMatches)
+
+    return (
+      <div className="modal-overlay" onClick={() => setShowPicker(false)}>
+        <div className="dbw-picker-modal" onClick={(e) => e.stopPropagation()}>
+          <h2>
+            {showingDatabases ? (
+              <>
+                <button
+                  className="dbw-picker-back"
+                  onClick={() => { setSelectedCluster(null); setProducerSearch('') }}
+                  title="Back to clusters"
+                >
+                  &#8592;
+                </button>
+                {selectedCluster}
+              </>
+            ) : showingGlobalSearch ? (
+              'Search Results'
+            ) : showingDatabaseBrowse ? (
+              'Browse by database'
+            ) : (
+              'Select Cluster'
+            )}
+          </h2>
+
+          <div className="dbw-picker-mode-tabs">
+            <button
+              type="button"
+              className={`dbw-picker-mode-tab ${pickerMode === 'cluster' ? 'active' : ''}`}
+              onClick={() => {
+                setPickerMode('cluster')
+                setSelectedCluster(null)
+              }}
+            >
+              By cluster
+            </button>
+            <button
+              type="button"
+              className={`dbw-picker-mode-tab ${pickerMode === 'database' ? 'active' : ''}`}
+              onClick={() => {
+                setPickerMode('database')
+                setSelectedCluster(null)
+              }}
+            >
+              By database name
+            </button>
+          </div>
+
+          <input
+            ref={searchInputRef}
+            className="form-input dbw-picker-search"
+            type="text"
+            placeholder={
+              showingDatabaseBrowse
+                ? 'Search by database name, host, or cluster...'
+                : showingDatabases
+                  ? 'Search databases in this cluster...'
+                  : 'Search clusters or database names...'
+            }
+            value={producerSearch}
+            onChange={(e) => setProducerSearch(e.target.value)}
+          />
+
+          {connectError && (
+            <div className="dbw-error-banner" style={{ margin: '0 0 8px' }}>
+              <span className="dbw-error-icon">!</span>
+              <span>{connectError}</span>
+            </div>
+          )}
+
+          <div className="dbw-picker-list">
+            {producersLoading ? (
+              <div className="dbw-picker-loading">
+                <div className="dbw-connecting-spinner dbw-spinner-sm" />
+                <span>Loading available databases...</span>
+              </div>
+            ) : showingDatabaseBrowse ? (
+              databaseBrowseList.length === 0 ? (
+                <div className="dbw-picker-empty">
+                  {searchActive
+                    ? `No results for "${producerSearch}"`
+                    : 'No databases available'}
+                </div>
+              ) : (
+                databaseBrowseGroups.map(({ cluster, producers: group }) => (
+                  <div key={cluster} className="dbw-picker-group">
+                    <div className="dbw-picker-group-label">{cluster}</div>
+                    {group.map((p) => renderProducerRow(p, databaseBrowseDupes, true))}
+                  </div>
+                ))
+              )
+            ) : showingGlobalSearch ? (
+              globalSearchMatches.length === 0 ? (
+                <div className="dbw-picker-empty">
+                  {`No results for "${producerSearch}"`}
+                </div>
+              ) : (
+                globalSearchGroups.map(({ cluster, producers: group }) => (
+                  <div key={cluster} className="dbw-picker-group">
+                    <div className="dbw-picker-group-label">{cluster}</div>
+                    {group.map((p) => renderProducerRow(p, globalDupes, true))}
+                  </div>
+                ))
+              )
+            ) : !showingDatabases ? (
+              filteredClusters.length === 0 ? (
+                <div className="dbw-picker-empty">
+                  {clusters.length === 0
+                    ? 'No clusters available'
+                    : `No results for "${producerSearch}"`}
+                </div>
+              ) : (
+                filteredClusters.map((cluster) => {
+                  const count = producers.filter((p) => p.cluster === cluster).length
+                  return (
+                    <button
+                      key={cluster}
+                      className="dbw-picker-item"
+                      onClick={() => { setSelectedCluster(cluster); setProducerSearch('') }}
+                    >
+                      <span className="dbw-picker-db-name">{cluster}</span>
+                      <span className="dbw-picker-db-count">{count} db{count !== 1 ? 's' : ''}</span>
+                    </button>
+                  )
+                })
+              )
+            ) : clusterDatabases.length === 0 ? (
+              <div className="dbw-picker-empty">
+                {`No results for "${producerSearch}"`}
+              </div>
+            ) : (
+              clusterDatabases.map((p) => renderProducerRow(p, clusterDupes, false))
+            )}
+          </div>
+
+          <div className="modal-actions">
+            <button className="btn" onClick={() => setShowPicker(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   /* ── Render: Not Connected ── */
 
   if (!connection && connectPhase === 'idle') {
@@ -469,102 +679,6 @@ export function DbWorkbenchView() {
 
   /* ── Render: Connected ── */
 
-  function renderPickerModal() {
-    const showingDatabases = selectedCluster !== null
-
-    return (
-      <div className="modal-overlay" onClick={() => setShowPicker(false)}>
-        <div className="dbw-picker-modal" onClick={(e) => e.stopPropagation()}>
-          <h2>
-            {showingDatabases ? (
-              <>
-                <button
-                  className="dbw-picker-back"
-                  onClick={() => { setSelectedCluster(null); setProducerSearch('') }}
-                  title="Back to clusters"
-                >
-                  &#8592;
-                </button>
-                {selectedCluster}
-              </>
-            ) : (
-              'Select Cluster'
-            )}
-          </h2>
-          <input
-            ref={searchInputRef}
-            className="form-input dbw-picker-search"
-            type="text"
-            placeholder={showingDatabases ? 'Search databases...' : 'Search clusters...'}
-            value={producerSearch}
-            onChange={(e) => setProducerSearch(e.target.value)}
-          />
-
-          {connectError && (
-            <div className="dbw-error-banner" style={{ margin: '0 0 8px' }}>
-              <span className="dbw-error-icon">!</span>
-              <span>{connectError}</span>
-            </div>
-          )}
-
-          <div className="dbw-picker-list">
-            {producersLoading ? (
-              <div className="dbw-picker-loading">
-                <div className="dbw-connecting-spinner dbw-spinner-sm" />
-                <span>Loading available databases...</span>
-              </div>
-            ) : !showingDatabases ? (
-              /* ── Level 1: Cluster list ── */
-              filteredClusters.length === 0 ? (
-                <div className="dbw-picker-empty">
-                  {clusters.length === 0
-                    ? 'No clusters available'
-                    : `No results for "${producerSearch}"`}
-                </div>
-              ) : (
-                filteredClusters.map((cluster) => {
-                  const count = producers.filter((p) => p.cluster === cluster).length
-                  return (
-                    <button
-                      key={cluster}
-                      className="dbw-picker-item"
-                      onClick={() => { setSelectedCluster(cluster); setProducerSearch('') }}
-                    >
-                      <span className="dbw-picker-db-name">{cluster}</span>
-                      <span className="dbw-picker-db-count">{count} db{count !== 1 ? 's' : ''}</span>
-                    </button>
-                  )
-                })
-              )
-            ) : (
-              /* ── Level 2: Database list within cluster ── */
-              clusterDatabases.length === 0 ? (
-                <div className="dbw-picker-empty">
-                  {`No results for "${producerSearch}"`}
-                </div>
-              ) : (
-                clusterDatabases.map((p) => (
-                  <button
-                    key={p.name}
-                    className="dbw-picker-item"
-                    onClick={() => handleConnect(p.name)}
-                  >
-                    <span className="dbw-picker-db-name">{p.dbName}</span>
-                  </button>
-                ))
-              )
-            )}
-          </div>
-
-          <div className="modal-actions">
-            <button className="btn" onClick={() => setShowPicker(false)}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
 
   function renderNullCell() {
     return <span className="dbw-null">NULL</span>

@@ -23,6 +23,26 @@ vi.mock('./presets', () => ({
   PresetBar: () => <div data-testid="preset-bar" />,
   PresetList: () => <div data-testid="preset-list" />,
 }))
+vi.mock('./SessionGrid', () => ({ SessionGrid: () => <div data-testid="session-grid" /> }))
+vi.mock('./HintsPanel', () => ({ HintsPanel: () => null }))
+vi.mock('./ResourceBadge', () => ({ ResourceBadge: () => null }))
+vi.mock('./ResourcePanel', () => ({ ResourcePanel: () => null }))
+vi.mock('./SummariesPanel', () => ({ SummariesPanel: () => null }))
+vi.mock('./McpSkillsPanel', () => ({ McpSkillsPanel: () => null }))
+vi.mock('./split-pane', () => ({
+  SessionSplitPane: ({ sessionId, active }: { sessionId: string; active: boolean }) => (
+    <div data-testid={`terminal-${sessionId}`} data-active={String(active)} />
+  ),
+}))
+vi.mock('./WorkspaceInitProgress', () => ({ WorkspaceInitProgress: () => null }))
+vi.mock('./ChatInputBar', () => ({ ChatInputBar: () => null }))
+vi.mock('../hooks/useResourceMonitor', () => ({
+  useResourceMonitor: () => ({
+    snapshot: null,
+    getSessionMetrics: () => null,
+    isLoading: false,
+  }),
+}))
 
 function makeSession(overrides: Partial<{
   id: string

@@ -12,25 +12,29 @@ export function registerMcpHandlers() {
     const home = homedir()
 
     const userFile = join(home, '.claude.json')
+    let userServers: Record<string, any> = {}
     try {
       if (existsSync(userFile)) {
         const data = JSON.parse(readFileSync(userFile, 'utf-8'))
-        if (data.mcpServers && Object.keys(data.mcpServers).length > 0) {
-          configs.push({ scope: 'user', path: userFile, servers: data.mcpServers })
+        if (data.mcpServers && typeof data.mcpServers === 'object') {
+          userServers = data.mcpServers
         }
       }
     } catch { /* ignore */ }
+    configs.push({ scope: 'user', path: userFile, servers: userServers })
 
     if (projectPath) {
       const projectFile = join(projectPath, '.mcp.json')
+      let projectServers: Record<string, any> = {}
       try {
         if (existsSync(projectFile)) {
           const data = JSON.parse(readFileSync(projectFile, 'utf-8'))
-          if (data.mcpServers && Object.keys(data.mcpServers).length > 0) {
-            configs.push({ scope: 'project', path: projectFile, servers: data.mcpServers })
+          if (data.mcpServers && typeof data.mcpServers === 'object') {
+            projectServers = data.mcpServers
           }
         }
       } catch { /* ignore */ }
+      configs.push({ scope: 'project', path: projectFile, servers: projectServers })
     }
 
     return configs
@@ -134,6 +138,55 @@ export function registerMcpHandlers() {
       return { success: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
+
+  ipcMain.handle('mcp-read-raw-file', (_event, filePath: string) => {
+    try {
+      if (!existsSync(filePath)) {
+        const empty = { mcpServers: {} }
+        return { success: true, content: JSON.stringify(empty, null, 2) + '\n', exists: false }
+      }
+      const content = readFileSync(filePath, 'utf-8')
+      return { success: true, content, exists: true }
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('mcp-save-raw-file', (_event, filePath: string, content: string) => {
+    try {
+      const parsed = JSON.parse(content)
+      if (!parsed || typeof parsed !== 'object') {
+        return { success: false, error: 'Root must be a JSON object' }
+      }
+      mkdirSync(join(filePath, '..'), { recursive: true })
+      writeFileSync(filePath, JSON.stringify(parsed, null, 2) + '\n', 'utf-8')
+      return { success: true }
+    } catch (err: unknown) {
+      if (err instanceof SyntaxError) {
+        return { success: false, error: `Invalid JSON: ${err.message}` }
+      }
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle(
+    'mcp-merge-servers',
+    (_event, filePath: string, newServers: Record<string, any>, mode: 'merge' | 'replace') => {
+      try {
+        let data: any = {}
+        if (existsSync(filePath)) {
+          data = JSON.parse(readFileSync(filePath, 'utf-8'))
+        }
+        const existing = data.mcpServers && typeof data.mcpServers === 'object' ? data.mcpServers : {}
+        data.mcpServers = mode === 'replace' ? newServers : { ...existing, ...newServers }
+        mkdirSync(join(filePath, '..'), { recursive: true })
+        writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+        return { success: true }
+      } catch (err: unknown) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
 
   ipcMain.handle('skills-list', (_event, projectPath?: string) => {
     const skills: { name: string; scope: string; path: string; description: string }[] = []

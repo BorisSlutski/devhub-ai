@@ -329,3 +329,38 @@
   line-height: 1.5;
   margin: 0;
 }
+
+.mcp-add-row-wrap {
+  flex-wrap: wrap;
+}
+
+.mcp-json-editor {
+  min-height: 220px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.mcp-json-path {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.mcp-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+.mcp-hint a {
+  color: var(--accent);
+}
+
+.mcp-preview-json {
+  max-height: 140px;
+  margin-bottom: 10px;
+}

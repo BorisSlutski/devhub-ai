@@ -13,6 +13,8 @@ export interface ClaudeSession {
   pendingRecap?: boolean
   title?: string
   initializing?: boolean
+  nickname?: string
+  accentColor?: string
 }
 
 interface UseClaudeSessionsOptions {
@@ -89,8 +91,9 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
               branchName: result.branchName ?? rec.branchName,
               claudeSessionId: rec.claudeSessionId ?? null,
               dangerousMode: rec.dangerousMode,
+              nickname: rec.nickname,
+              accentColor: rec.accentColor,
             })
-            // Refresh the active-session record (worktree/branch may have changed)
             window.api.activeSessionsSet({
               id: rec.id,
               claudeSessionId: rec.claudeSessionId,
@@ -99,6 +102,8 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
               worktreePath: result.worktreePath ?? rec.worktreePath,
               branchName: result.branchName ?? rec.branchName,
               dangerousMode: rec.dangerousMode,
+              nickname: rec.nickname,
+              accentColor: rec.accentColor,
             })
           } else {
             window.api.activeSessionsRemove(rec.id)
@@ -379,6 +384,27 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
     }
   }, [onSessionActivated])
 
+  const updateSessionMeta = useCallback((sessionId: string, meta: { nickname?: string; accentColor?: string }) => {
+    setSessions(prev => prev.map(s =>
+      s.id === sessionId ? { ...s, ...meta } : s
+    ))
+    window.api.activeSessionsUpdateMeta(sessionId, meta)
+    const session = sessions.find(s => s.id === sessionId)
+    if (session) {
+      window.api.activeSessionsSet({
+        id: sessionId,
+        claudeSessionId: session.claudeSessionId ?? null,
+        folderName: session.folderName,
+        folderPath: session.folderPath,
+        worktreePath: session.worktreePath,
+        branchName: session.branchName,
+        dangerousMode: session.dangerousMode,
+        nickname: meta.nickname ?? session.nickname,
+        accentColor: meta.accentColor ?? session.accentColor,
+      })
+    }
+  }, [sessions])
+
   return {
     sessions,
     lastCreatedSessionId,
@@ -388,5 +414,6 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
     resumeFromHistory,
     closeSession,
     launchPreset,
+    updateSessionMeta,
   }
 }

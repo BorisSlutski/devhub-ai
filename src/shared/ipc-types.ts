@@ -34,6 +34,55 @@ export interface GitStatus {
   isGitRepo: boolean
 }
 
+export type GitSyncState =
+  | 'synced'
+  | 'behind'
+  | 'ahead'
+  | 'diverged'
+  | 'dirty'
+  | 'no-remote'
+  | 'no-base'
+  | 'not-git'
+  | 'error'
+
+export interface GitSyncStatus {
+  isGitRepo: boolean
+  baseBranch: string | null
+  currentBranch: string | null
+  commitsBehind: number
+  commitsAhead: number
+  uncommitted: number
+  state: GitSyncState
+  error?: string
+}
+
+export interface GitPullResult extends IpcResult {
+  branch?: string | null
+  behind?: number
+  ahead?: number
+}
+
+export interface GitPullAllResult {
+  path: string
+  success: boolean
+  error?: string
+  branch?: string | null
+}
+
+/** Emitted when a background pull completes (per folder). */
+export type GitPullFinishedEvent = GitPullAllResult
+
+export interface GitPullBatchFinishedEvent {
+  total: number
+  ok: number
+  failed: number
+}
+
+export interface GitPullStartResult {
+  started: boolean
+  count?: number
+}
+
 export interface BranchList {
   current: string | null
   branches: string[]
@@ -156,6 +205,8 @@ export interface ActiveSession {
   worktreePath: string | null
   branchName: string | null
   dangerousMode?: boolean
+  nickname?: string
+  accentColor?: string
 }
 
 // ── Session history ──
@@ -184,6 +235,13 @@ export interface McpConfigEntry {
   scope: string
   path: string
   servers: Record<string, any>
+}
+
+export interface McpRawFileResult {
+  success: boolean
+  content?: string
+  exists?: boolean
+  error?: string
 }
 
 export interface SkillEntry {
@@ -320,6 +378,10 @@ export interface SessionPreset {
   initialCommands?: string[]
   pinned: boolean
   icon?: string
+  nickname?: string
+  accentColor?: string
+  claudeArgs?: string
+  envVars?: Record<string, string>
   createdAt: number
   lastUsedAt?: number
   useCount: number
@@ -335,6 +397,17 @@ export interface PresetLaunchOptions {
 export interface PresetLaunchResult extends PtyCreateResult {
   preset?: SessionPreset
 }
+
+// ── Airflow (wix-astronomer-dags local Astro) ──
+
+export type {
+  AirflowConnection,
+  AirflowDag,
+  AirflowDagRun,
+  AirflowTaskInstance,
+  AirflowDiscoverResult,
+  AirflowHealthResult,
+} from './airflow-types'
 
 // ── Session summaries ──
 

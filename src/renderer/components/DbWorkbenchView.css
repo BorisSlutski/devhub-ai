@@ -225,6 +225,36 @@
   margin: 0 0 14px 0;
 }
 
+.dbw-picker-mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.dbw-picker-mode-tab {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.dbw-picker-mode-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.dbw-picker-mode-tab.active {
+  color: var(--accent);
+  border-color: rgba(88, 166, 255, 0.45);
+  background: rgba(88, 166, 255, 0.1);
+}
+
 .dbw-picker-search {
   margin-bottom: 12px;
 }
@@ -286,8 +316,22 @@
   background: var(--bg-tertiary);
 }
 
+.dbw-picker-item-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
 .dbw-picker-db-name {
   font-weight: 500;
+}
+
+.dbw-picker-db-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'SF Mono', 'Menlo', monospace;
 }
 
 .dbw-picker-db-type {

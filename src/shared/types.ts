@@ -29,8 +29,10 @@ export interface AppState {
   chatInputEnabled?: boolean
   defaultModel?: string
   workspaceChosen?: boolean
-  activeTab?: 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access'
+  activeTab?: 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access' | 'airflow'
   selectedProjectId?: string | null
+  usePtyDaemon?: boolean
+  setupWizardDismissed?: boolean
 }
 
 export interface ProcessStatus {

@@ -6,6 +6,8 @@ import { app, BrowserWindow, nativeImage, shell } from 'electron'
 import { join } from 'path'
 import { processManager, getShellPath } from './process-manager'
 import { ptyManager } from './pty-manager'
+import { initPtyBackend, attachPtyHooks, isPtyDaemonEnabled } from './pty-backend'
+import { initAutoUpdater } from './updater'
 import { ScrollbackReader } from './scrollback-manager'
 import { startBrowserBridge, setBrowserBridgeWindow, stopBrowserBridge } from './browser-bridge'
 import { pipelineManager } from './pipeline-manager'
@@ -36,6 +38,7 @@ import {
   registerPresetHandlers,
   registerAkeylessHandlers,
   registerDbWorkbenchHandlers,
+  registerAirflowHandlers,
   registerSummaryHandlers,
 } from './handlers'
 import { resourceMonitor } from './resource-monitor'
@@ -74,8 +77,12 @@ async function createWindow() {
   }
 
   processManager.setMainWindow(mainWindow)
+  const shellPath = getShellPath()
   ptyManager.setMainWindow(mainWindow)
-  ptyManager.setShellPath(getShellPath())
+  ptyManager.setShellPath(shellPath)
+  if (isPtyDaemonEnabled()) {
+    await initPtyBackend(mainWindow, shellPath)
+  }
   setBrowserBridgeWindow(mainWindow)
   pipelineManager.setMainWindow(mainWindow)
   pipelineManager.loadConfigs()
@@ -84,41 +91,37 @@ async function createWindow() {
   setSessionMainWindow(mainWindow)
   workspaceInitTracker.setMainWindow(mainWindow)
   notificationManager.setMainWindow(mainWindow)
-  ptyManager.onData((sessionId, data) => promptEnhancer.feedContext(sessionId, data))
 
-  // Idle detection for desktop notifications
-  // Mirrors the 8s idle logic in XTerminal, but runs in the main process
+  // Idle detection for desktop notifications (mirrors XTerminal 8s idle)
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const sessionWaiting = new Set<string>()
 
-  ptyManager.onData((sessionId) => {
-    // Any data means the session is active — reset idle timer
-    if (sessionWaiting.has(sessionId)) {
+  attachPtyHooks(
+    (sessionId, data) => {
+      promptEnhancer.feedContext(sessionId, data)
+      if (sessionWaiting.has(sessionId)) sessionWaiting.delete(sessionId)
+      const existing = idleTimers.get(sessionId)
+      if (existing) clearTimeout(existing)
+      idleTimers.set(sessionId, setTimeout(() => {
+        if (!sessionWaiting.has(sessionId)) {
+          sessionWaiting.add(sessionId)
+          notificationManager.notifySessionComplete(sessionId)
+        }
+      }, 8000))
+    },
+    (sessionId) => {
+      const timer = idleTimers.get(sessionId)
+      if (timer) clearTimeout(timer)
+      idleTimers.delete(sessionId)
       sessionWaiting.delete(sessionId)
+      notificationManager.untrackSession(sessionId)
+      statuslineWatcher.unwatchSession(sessionId)
     }
-    const existing = idleTimers.get(sessionId)
-    if (existing) clearTimeout(existing)
+  )
 
-    idleTimers.set(sessionId, setTimeout(() => {
-      if (!sessionWaiting.has(sessionId)) {
-        sessionWaiting.add(sessionId)
-        notificationManager.notifySessionComplete(sessionId)
-      }
-    }, 8000))
-  })
-
-  ptyManager.onExit((sessionId) => {
-    const timer = idleTimers.get(sessionId)
-    if (timer) clearTimeout(timer)
-    idleTimers.delete(sessionId)
-    sessionWaiting.delete(sessionId)
-    notificationManager.untrackSession(sessionId)
-  })
-
-  // Statusline: deploy script, inject settings, watch sessions
   statuslineWatcher.setMainWindow(mainWindow)
   statuslineWatcher.setup()
-  ptyManager.onExit((sessionId) => statuslineWatcher.unwatchSession(sessionId))
+  initAutoUpdater()
 
   await startBrowserBridge()
 
@@ -182,6 +185,7 @@ function setupIPC() {
   registerPresetHandlers()
   registerAkeylessHandlers()
   registerDbWorkbenchHandlers()
+  registerAirflowHandlers()
   registerSummaryHandlers()
 }
 

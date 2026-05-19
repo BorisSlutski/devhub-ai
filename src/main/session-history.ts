@@ -1,6 +1,8 @@
 import { join, basename } from 'path'
 import { homedir } from 'os'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'fs'
+import type { GridLayout, SessionUiState } from '../shared/session-ui'
+import { DEFAULT_SESSION_UI } from '../shared/session-ui'
 
 // ── Active session tracking (for auto-resume on restart) ──
 
@@ -12,6 +14,8 @@ export interface ActiveSession {
   worktreePath: string | null
   branchName: string | null
   dangerousMode?: boolean
+  nickname?: string
+  accentColor?: string
 }
 
 const DEVHUB_AI_DIR = join(homedir(), '.devhub-ai')
@@ -20,11 +24,19 @@ const ACTIVE_FILE = join(DEVHUB_AI_DIR, 'active-sessions.json')
 interface ActiveSessionsFile {
   sessions: ActiveSession[]
   activeId?: string | null
+  sessionOrder?: string[]
+  gridMode?: boolean
+  gridLayout?: GridLayout
+  gridSessionIds?: string[]
 }
 
 class ActiveSessionStore {
   private sessions: ActiveSession[] = []
   private activeId: string | null = null
+  private sessionOrder: string[] = []
+  private gridMode = false
+  private gridLayout: GridLayout = '1x1'
+  private gridSessionIds: string[] = []
 
   private load() {
     try {
@@ -34,19 +46,38 @@ class ActiveSessionStore {
         if (Array.isArray(raw)) {
           this.sessions = raw
           this.activeId = null
+          this.sessionOrder = raw.map((s: ActiveSession) => s.id)
         } else {
           const parsed = raw as ActiveSessionsFile
           this.sessions = parsed.sessions || []
           this.activeId = parsed.activeId ?? null
+          this.sessionOrder = parsed.sessionOrder ?? this.sessions.map(s => s.id)
+          this.gridMode = parsed.gridMode ?? false
+          this.gridLayout = parsed.gridLayout ?? '1x1'
+          this.gridSessionIds = parsed.gridSessionIds ?? []
         }
       }
-    } catch { this.sessions = []; this.activeId = null }
+    } catch {
+      this.sessions = []
+      this.activeId = null
+      this.sessionOrder = []
+      this.gridMode = false
+      this.gridLayout = '1x1'
+      this.gridSessionIds = []
+    }
   }
 
   private save() {
     try {
       mkdirSync(DEVHUB_AI_DIR, { recursive: true })
-      const payload: ActiveSessionsFile = { sessions: this.sessions, activeId: this.activeId }
+      const payload: ActiveSessionsFile = {
+        sessions: this.sessions,
+        activeId: this.activeId,
+        sessionOrder: this.sessionOrder,
+        gridMode: this.gridMode,
+        gridLayout: this.gridLayout,
+        gridSessionIds: this.gridSessionIds,
+      }
       writeFileSync(ACTIVE_FILE, JSON.stringify(payload, null, 2), 'utf-8')
     } catch (err) {
       console.error('[ActiveSessions] save failed:', err)
@@ -67,9 +98,50 @@ class ActiveSessionStore {
     if (s) { s.claudeSessionId = claudeSessionId; this.save() }
   }
 
+  updateMeta(id: string, meta: { nickname?: string; accentColor?: string }) {
+    this.load()
+    const s = this.sessions.find(r => r.id === id)
+    if (!s) return
+    if (meta.nickname !== undefined) s.nickname = meta.nickname
+    if (meta.accentColor !== undefined) s.accentColor = meta.accentColor
+    this.save()
+  }
+
+  setSessionOrder(order: string[]) {
+    this.load()
+    this.sessionOrder = order
+    this.save()
+  }
+
+  getSessionOrder(): string[] {
+    this.load()
+    return [...this.sessionOrder]
+  }
+
+  getUiState(): SessionUiState {
+    this.load()
+    return {
+      sessionOrder: [...this.sessionOrder],
+      gridMode: this.gridMode,
+      gridLayout: this.gridLayout,
+      gridSessionIds: [...this.gridSessionIds],
+    }
+  }
+
+  setUiState(partial: Partial<SessionUiState>) {
+    this.load()
+    if (partial.sessionOrder !== undefined) this.sessionOrder = partial.sessionOrder
+    if (partial.gridMode !== undefined) this.gridMode = partial.gridMode
+    if (partial.gridLayout !== undefined) this.gridLayout = partial.gridLayout
+    if (partial.gridSessionIds !== undefined) this.gridSessionIds = partial.gridSessionIds
+    this.save()
+  }
+
   remove(id: string) {
     this.load()
     this.sessions = this.sessions.filter(s => s.id !== id)
+    this.sessionOrder = this.sessionOrder.filter(sid => sid !== id)
+    this.gridSessionIds = this.gridSessionIds.filter(sid => sid !== id)
     if (this.activeId === id) this.activeId = null
     this.save()
   }

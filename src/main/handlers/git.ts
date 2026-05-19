@@ -1,10 +1,11 @@
-import { ipcMain, shell } from 'electron'
+import { ipcMain, shell, BrowserWindow, type WebContents } from 'electron'
 import { join } from 'path'
 import { readdirSync, statSync, mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs'
 import { execSync, exec } from 'child_process'
 import { promisify } from 'util'
 import { homedir } from 'os'
 import { WorkspaceFolder } from '../../shared/types'
+import { buildGitSyncStatus, pullFolderToBase } from '../git-sync'
 
 const execAsync = promisify(exec)
 
@@ -169,6 +170,88 @@ export function registerGitHandlers() {
     } catch { /* ignore */ }
 
     return { current, branches }
+  })
+
+  ipcMain.handle('get-git-sync-status', async (_event, folderPath: string, fetch = false) => {
+    return buildGitSyncStatus(folderPath, fetch)
+  })
+
+  ipcMain.handle('pull-folder-to-base', async (_event, folderPath: string) => {
+    return pullFolderToBase(folderPath)
+  })
+
+  ipcMain.handle('pull-all-folders-to-base', async (_event, folderPaths: string[]) => {
+    const results: Array<{
+      path: string
+      success: boolean
+      error?: string
+      branch?: string | null
+    }> = []
+    for (const folderPath of folderPaths) {
+      const result = pullFolderToBase(folderPath)
+      results.push({
+        path: folderPath,
+        success: result.success,
+        error: result.error,
+        branch: result.branch,
+      })
+    }
+    return results
+  })
+
+  function emitPullFinished(sender: WebContents, payload: {
+    path: string
+    success: boolean
+    error?: string
+    branch?: string | null
+  }) {
+    const win = BrowserWindow.fromWebContents(sender)
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('git-pull-finished', payload)
+    }
+  }
+
+  function emitPullBatchFinished(sender: WebContents, payload: { total: number; ok: number; failed: number }) {
+    const win = BrowserWindow.fromWebContents(sender)
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('git-pull-batch-finished', payload)
+    }
+  }
+
+  ipcMain.handle('start-pull-folder-to-base', (event, folderPath: string) => {
+    const sender = event.sender
+    setImmediate(() => {
+      const result = pullFolderToBase(folderPath)
+      emitPullFinished(sender, {
+        path: folderPath,
+        success: result.success,
+        error: result.error,
+        branch: result.branch,
+      })
+    })
+    return { started: true }
+  })
+
+  ipcMain.handle('start-pull-all-folders-to-base', (event, folderPaths: string[]) => {
+    const sender = event.sender
+    const paths = [...folderPaths]
+    setImmediate(async () => {
+      let ok = 0
+      let failed = 0
+      for (const folderPath of paths) {
+        const result = pullFolderToBase(folderPath)
+        if (result.success) ok++
+        else failed++
+        emitPullFinished(sender, {
+          path: folderPath,
+          success: result.success,
+          error: result.error,
+          branch: result.branch,
+        })
+      }
+      emitPullBatchFinished(sender, { total: paths.length, ok, failed })
+    })
+    return { started: true, count: paths.length }
   })
 
   ipcMain.handle('checkout-branch', async (_event, folderPath: string, branchName: string) => {

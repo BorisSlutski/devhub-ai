@@ -12,14 +12,17 @@ import { ClaudeSessionsView } from './components/ClaudeSessionsView'
 import { NewSessionModal } from './components/NewSessionModal'
 import { ShortcutsHelp } from './components/ShortcutsHelp'
 import { SettingsModal } from './components/SettingsModal'
+import { CommandPalette, type PaletteAction } from './components/CommandPalette'
+import { SetupWizard } from './components/SetupWizard'
 import { Toast } from './components/Toast'
 import { AgentsView } from './components/AgentsView'
 import { DbWorkbenchView } from './components/DbWorkbenchView'
+import { AirflowView } from './components/AirflowView'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Skeleton } from './components/Skeleton'
 import { Project } from '../shared/types'
 
-type TabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access'
+type TabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access' | 'airflow'
 
 export function App() {
   const {
@@ -71,6 +74,14 @@ export function App() {
   const [bulkMode, setBulkMode] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showCommandPalette, setShowCommandPalette] = useState(false)
+  const [showSetupWizard, setShowSetupWizard] = useState(false)
+
+  useEffect(() => {
+    if (loaded && !state.setupWizardDismissed) {
+      setShowSetupWizard(true)
+    }
+  }, [loaded, state.setupWizardDismissed])
   const [showNewSession, setShowNewSession] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null)
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
@@ -91,6 +102,7 @@ export function App() {
     resumeFromHistory: handleResumeFromHistory,
     closeSession: handleCloseClaudeSession,
     launchPreset: handleLaunchPreset,
+    updateSessionMeta: handleUpdateSessionMeta,
   } = useClaudeSessions({
     dangerousMode: state.dangerousMode ?? false,
     defaultModel: state.defaultModel,
@@ -123,6 +135,7 @@ export function App() {
         (active as HTMLElement).blur()
         return
       }
+      if (showCommandPalette) { setShowCommandPalette(false); return }
       if (showHelp) { setShowHelp(false); return }
       if (editingProject) { setEditingProject(null); return }
       if (bulkMode) { setBulkMode(false); setBulkSelection(new Set()); return }
@@ -131,6 +144,26 @@ export function App() {
     },
     onHelp: () => setShowHelp(true)
   })
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault()
+        setShowCommandPalette(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const paletteActions = useMemo((): PaletteAction[] => [
+    { id: 'tab-launchpad', label: 'Go to Launchpad', group: 'Navigation', run: () => setActiveTab('launchpad') },
+    { id: 'tab-folders', label: 'Go to All Folders', group: 'Navigation', run: () => setActiveTab('folders') },
+    { id: 'tab-claude', label: 'Go to Claude Sessions', group: 'Navigation', run: () => setActiveTab('claude') },
+    { id: 'new-session', label: 'New Claude session', group: 'Sessions', keywords: 'terminal', run: () => { setActiveTab('claude'); setShowNewSession(true) } },
+    { id: 'settings', label: 'Open Settings', group: 'App', run: () => setShowSettings(true) },
+    { id: 'help', label: 'Keyboard shortcuts', group: 'App', run: () => setShowHelp(true) },
+  ], [])
 
   // Branch state: { projectId -> { current, branches } }
   const [branchMap, setBranchMap] = useState<Map<string, { current: string | null; branches: string[] }>>(new Map())
@@ -455,6 +488,12 @@ export function App() {
         >
           DB Access
         </div>
+        <div
+          className={`tab ${activeTab === 'airflow' ? 'active' : ''}`}
+          onClick={() => setActiveTab('airflow')}
+        >
+          Airflow
+        </div>
       </div>
 
       {/* DB Access is always mounted so connection state survives tab switches */}
@@ -469,7 +508,18 @@ export function App() {
         </ErrorBoundary>
       </div>
 
-      {activeTab === 'db-access' ? null : activeTab === 'agents' ? (
+      <div style={{
+        display: activeTab === 'airflow' ? 'flex' : 'none',
+        flex: 1,
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}>
+        <ErrorBoundary name="Airflow">
+          <AirflowView scanPath={state.scanPath} />
+        </ErrorBoundary>
+      </div>
+
+      {activeTab === 'db-access' || activeTab === 'airflow' ? null : activeTab === 'agents' ? (
         <ErrorBoundary name="Agents">
           <AgentsView />
         </ErrorBoundary>
@@ -487,6 +537,7 @@ export function App() {
             onResumeFromHistory={handleResumeFromHistory}
             onOpenPipelineSession={handleOpenPipelineSession}
             onLaunchPreset={handleLaunchPreset}
+            onUpdateSessionMeta={handleUpdateSessionMeta}
             onWaitingSessionsChange={handleWaitingSessionsChange}
           />
         </ErrorBoundary>
@@ -624,6 +675,17 @@ export function App() {
 
       {showHelp && <ShortcutsHelp onClose={() => setShowHelp(false)} />}
 
+      {showCommandPalette && (
+        <CommandPalette actions={paletteActions} onClose={() => setShowCommandPalette(false)} />
+      )}
+
+      {showSetupWizard && (
+        <SetupWizard onDismiss={() => {
+          setShowSetupWizard(false)
+          persist({ ...state, setupWizardDismissed: true })
+        }} />
+      )}
+
       {showSettings && (
         <SettingsModal
           currentPath={state.scanPath}
@@ -632,8 +694,9 @@ export function App() {
           dangerousMode={state.dangerousMode ?? false}
           chatInputEnabled={state.chatInputEnabled ?? true}
           defaultModel={state.defaultModel ?? ''}
-          onSave={(newPath, scanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel) => {
-            persist({ ...state, scanPath: newPath, scanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel })
+          usePtyDaemon={state.usePtyDaemon ?? false}
+          onSave={(newPath, scanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel, usePtyDaemon) => {
+            persist({ ...state, scanPath: newPath, scanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel, usePtyDaemon })
             setShowSettings(false)
           }}
           onClose={() => setShowSettings(false)}

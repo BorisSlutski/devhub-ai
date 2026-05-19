@@ -15,6 +15,10 @@ import { useResourceMonitor } from '../hooks/useResourceMonitor'
 import { WorkspaceInitProgress } from './WorkspaceInitProgress'
 import { PresetBar, PresetList } from './presets'
 import { SummariesPanel } from './SummariesPanel'
+import { SessionGrid } from './SessionGrid'
+import { HintsPanel } from './HintsPanel'
+import type { GridLayout } from '../../shared/session-ui'
+import { SESSION_ACCENT_COLORS, layoutForCount, accentHex } from '../../shared/session-ui'
 import './ClaudeSessionsView.css'
 
 function formatTimeAgo(ts: number): string {
@@ -42,6 +46,8 @@ interface Session {
   pendingRecap?: boolean
   title?: string
   initializing?: boolean
+  nickname?: string
+  accentColor?: string
 }
 
 interface HistoryRecord {
@@ -71,13 +77,14 @@ interface Props {
   onResumeFromHistory: (claudeSessionId: string, folderName: string, folderPath: string, worktreePath?: string | null) => void
   onOpenPipelineSession?: (folderName: string, folderPath: string, worktreePath: string) => void
   onLaunchPreset?: (presetId: string) => void
+  onUpdateSessionMeta?: (sessionId: string, meta: { nickname?: string; accentColor?: string }) => void
   /** Fires whenever the set of waiting-for-input session ids changes. */
   onWaitingSessionsChange?: (waitingIds: string[]) => void
 }
 
 type SidePanel = 'none' | 'files' | 'file-view' | 'changes' | 'search' | 'browser' | 'pipeline' | 'mcp' | 'history' | 'resources' | 'presets' | 'summaries'
 
-export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled, chatInputEnabled, scanPath, onNewSession, onCloseSession, onResumeSession, onResumeFromHistory, onOpenPipelineSession, onLaunchPreset, onWaitingSessionsChange }: Props) {
+export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled, chatInputEnabled, scanPath, onNewSession, onCloseSession, onResumeSession, onResumeFromHistory, onOpenPipelineSession, onLaunchPreset, onUpdateSessionMeta, onWaitingSessionsChange }: Props) {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [sidePanel, setSidePanel] = useState<SidePanel>('none')
   const [viewingFile, setViewingFile] = useState<string | null>(null)
@@ -87,6 +94,13 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
   const [rtkDisabledSessions, setRtkDisabledSessions] = useState<Set<string>>(new Set())
   const [rtkAvailable, setRtkAvailable] = useState(false)
   const [sessionTitles, setSessionTitles] = useState<Map<string, string>>(new Map())
+  const [gridMode, setGridMode] = useState(false)
+  const [gridLayout, setGridLayout] = useState<GridLayout>('2x2')
+  const [gridSessionIds, setGridSessionIds] = useState<string[]>([])
+  const [sessionOrder, setSessionOrder] = useState<string[]>([])
+  const [showHints, setShowHints] = useState(false)
+  const [editingNicknameId, setEditingNicknameId] = useState<string | null>(null)
+  const [dragSessionId, setDragSessionId] = useState<string | null>(null)
   const { snapshot: resourceSnapshot, getSessionMetrics, isLoading: resourceLoading } = useResourceMonitor()
   const dragging = useRef(false)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -111,6 +125,84 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
   }, [rtkDisabledSessions])
 
   const recapSentRef = useRef<Set<string>>(new Set())
+  const uiLoadedRef = useRef(false)
+
+  useEffect(() => {
+    window.api.activeSessionsGetUi().then(ui => {
+      setSessionOrder(ui.sessionOrder || [])
+      setGridMode(ui.gridMode ?? false)
+      setGridLayout((ui.gridLayout as GridLayout) || '2x2')
+      setGridSessionIds(ui.gridSessionIds || [])
+      uiLoadedRef.current = true
+    }).catch(() => { uiLoadedRef.current = true })
+  }, [])
+
+  const persistUi = useCallback((partial: {
+    sessionOrder?: string[]
+    gridMode?: boolean
+    gridLayout?: GridLayout
+    gridSessionIds?: string[]
+  }) => {
+    if (!uiLoadedRef.current) return
+    window.api.activeSessionsSetUi(partial)
+  }, [])
+
+  useEffect(() => {
+    if (!uiLoadedRef.current) return
+    persistUi({ sessionOrder, gridMode, gridLayout, gridSessionIds })
+  }, [sessionOrder, gridMode, gridLayout, gridSessionIds, persistUi])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+      if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
+        e.preventDefault()
+        setGridMode(prev => {
+          const next = !prev
+          if (next && gridSessionIds.length === 0 && sessions.length > 0) {
+            const ids = sessions.slice(0, 8).map(s => s.id)
+            setGridSessionIds(ids)
+            setGridLayout(layoutForCount(ids.length))
+          }
+          return next
+        })
+      }
+      if (e.key === 'F1') {
+        e.preventDefault()
+        setShowHints(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [gridSessionIds.length, sessions])
+
+  const orderedSessions = useMemo(() => {
+    if (sessionOrder.length === 0) return sessions
+    const orderMap = new Map(sessionOrder.map((id, i) => [id, i]))
+    return [...sessions].sort((a, b) => {
+      const ai = orderMap.get(a.id) ?? 999
+      const bi = orderMap.get(b.id) ?? 999
+      return ai - bi
+    })
+  }, [sessions, sessionOrder])
+
+  useEffect(() => {
+    if (sessionOrder.length === 0 && sessions.length > 0) {
+      setSessionOrder(sessions.map(s => s.id))
+    } else {
+      const ids = new Set(sessions.map(s => s.id))
+      setSessionOrder(prev => {
+        const kept = prev.filter(id => ids.has(id))
+        const added = sessions.filter(s => !kept.includes(s.id)).map(s => s.id)
+        return [...kept, ...added]
+      })
+    }
+  }, [sessions.length])
+
+  const sessionDisplayName = useCallback((session: Session) => {
+    return session.nickname || sessionTitles.get(session.id) || session.folderName
+  }, [sessionTitles])
 
   // Bubble the waiting set up to the App so the Claude tab can show an indicator
   useEffect(() => {
@@ -431,6 +523,23 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
         <div className="sidebar-header">
           <span className="sidebar-header-label">Sessions</span>
           <button
+            type="button"
+            className={`sidebar-grid-btn ${gridMode ? 'active' : ''}`}
+            onClick={() => {
+              setGridMode(prev => {
+                const next = !prev
+                if (next && gridSessionIds.length === 0 && sessions.length > 0) {
+                  const ids = sessions.slice(0, Math.min(8, sessions.length)).map(s => s.id)
+                  setGridSessionIds(ids)
+                  setGridLayout(layoutForCount(ids.length))
+                }
+                return next
+              })
+            }}
+            title="Toggle grid view (Ctrl+G)"
+          >⊞</button>
+          <button
+            type="button"
             className="sidebar-new-btn"
             onClick={onNewSession}
             title="New Claude session"
@@ -442,23 +551,80 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
           onShowAllPresets={togglePresets}
         />
         <div className="sidebar-session-list">
-          {sessions.map((session) => {
+          {orderedSessions.map((session) => {
             const isActive = activeSessionId === session.id
             const isWaiting = waitingSessions.has(session.id) && !session.exited
             const isExited = !!session.exited
             const isInitializing = !!session.initializing
+            const accent = accentHex(session.accentColor)
             return (
               <div
                 key={session.id}
-                className={`sidebar-session-card ${isActive ? 'active' : ''} ${isExited ? 'exited' : ''} ${isWaiting ? 'waiting' : ''}`}
+                className={`sidebar-session-card ${isActive ? 'active' : ''} ${isExited ? 'exited' : ''} ${isWaiting ? 'waiting' : ''} ${dragSessionId === session.id ? 'dragging' : ''}`}
+                style={{ borderLeftColor: accent }}
+                draggable
+                onDragStart={() => setDragSessionId(session.id)}
+                onDragEnd={() => setDragSessionId(null)}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => {
+                  e.preventDefault()
+                  if (!dragSessionId || dragSessionId === session.id) return
+                  setSessionOrder(prev => {
+                    const next = [...prev]
+                    const from = next.indexOf(dragSessionId)
+                    const to = next.indexOf(session.id)
+                    if (from < 0 || to < 0) return prev
+                    next.splice(from, 1)
+                    next.splice(to, 0, dragSessionId)
+                    return next
+                  })
+                  setDragSessionId(null)
+                }}
                 onClick={() => handleSelectSession(session.id)}
               >
                 <div className="sidebar-card-row1">
-                  <span className={`sidebar-status-dot ${isExited ? 'exited' : isWaiting ? 'waiting' : 'active'}`} />
-                  <span className="sidebar-card-name" title={sessionTitles.get(session.id) || session.folderName}>
-                    {sessionTitles.get(session.id) || session.folderName}
-                  </span>
+                  <span
+                    className={`sidebar-status-dot ${isExited ? 'exited' : isWaiting ? 'waiting' : 'active'}`}
+                    style={!isExited && !isWaiting ? { background: accent, boxShadow: `0 0 6px ${accent}` } : undefined}
+                  />
+                  {editingNicknameId === session.id ? (
+                    <input
+                      className="sidebar-nickname-input"
+                      defaultValue={session.nickname || sessionDisplayName(session)}
+                      autoFocus
+                      onClick={e => e.stopPropagation()}
+                      onBlur={e => {
+                        onUpdateSessionMeta?.(session.id, { nickname: e.target.value.trim() || undefined })
+                        setEditingNicknameId(null)
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                        if (e.key === 'Escape') setEditingNicknameId(null)
+                      }}
+                    />
+                  ) : (
+                    <span
+                      className="sidebar-card-name"
+                      title={sessionDisplayName(session)}
+                      onDoubleClick={e => { e.stopPropagation(); setEditingNicknameId(session.id) }}
+                    >
+                      {sessionDisplayName(session)}
+                    </span>
+                  )}
+                  <select
+                    className="sidebar-accent-select"
+                    value={session.accentColor || 'blue'}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e => onUpdateSessionMeta?.(session.id, { accentColor: e.target.value })}
+                    title="Session color"
+                    aria-label="Session color"
+                  >
+                    {SESSION_ACCENT_COLORS.map(c => (
+                      <option key={c.id} value={c.id}>{c.label}</option>
+                    ))}
+                  </select>
                   <button
+                    type="button"
                     className="sidebar-card-close"
                     onClick={(e) => handleClose(session.id, e)}
                     title="Close session"
@@ -569,6 +735,24 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
           />
         )}
         <div className="claude-sessions-body" ref={bodyRef}>
+          {gridMode ? (
+            <SessionGrid
+              sessions={orderedSessions.map(s => ({
+                id: s.id,
+                label: sessionDisplayName(s),
+                accentColor: s.accentColor,
+                exited: s.exited,
+              }))}
+              activeSessionId={activeSessionId}
+              gridLayout={gridLayout}
+              gridSessionIds={gridSessionIds}
+              onSelectSession={handleSelectSession}
+              onCloseSession={onCloseSession}
+              onLayoutChange={setGridLayout}
+              onGridSessionIdsChange={setGridSessionIds}
+              onWaitingChange={handleWaitingChange}
+            />
+          ) : (
           <div className="claude-sessions-terminal">
           {sessions.map((session) => (
             <div
@@ -639,6 +823,7 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
             </div>
           ))}
         </div>
+          )}
         {sidePanel === 'presets' && (
           <>
             <div className="side-resize-handle" onMouseDown={onDragStart} />
@@ -799,6 +984,7 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
         )}
         </div>
       </div>
+      {showHints && <HintsPanel onClose={() => setShowHints(false)} />}
     </div>
   )
 }

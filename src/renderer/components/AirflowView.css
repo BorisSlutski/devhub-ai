@@ -1,0 +1,139 @@
+.airflow-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+.airflow-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.airflow-toolbar-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 120px;
+}
+
+.airflow-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.airflow-status.ok {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+}
+
+.airflow-status.err {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 15%, transparent);
+}
+
+.airflow-panes {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(180px, 1fr) minmax(240px, 1.2fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.airflow-pane {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  min-height: 0;
+}
+
+.airflow-pane:last-child {
+  border-right: none;
+}
+
+.airflow-pane-header {
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.airflow-pane-search {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.airflow-pane-search input {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.airflow-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.airflow-item {
+  padding: 8px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.airflow-item:hover {
+  background: var(--bg-secondary);
+}
+
+.airflow-item.selected {
+  background: var(--bg-tertiary);
+  border-left: 3px solid var(--accent);
+}
+
+.airflow-item-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.airflow-log {
+  flex: 1;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.airflow-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  gap: 8px;
+}
+
+.airflow-empty code {
+  font-size: 11px;
+  color: var(--text-secondary);
+}

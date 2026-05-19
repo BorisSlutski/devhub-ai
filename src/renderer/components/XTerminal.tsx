@@ -33,6 +33,40 @@ const DARK_THEME = {
   brightWhite: '#ffffff',
 }
 
+const LIGHT_THEME = {
+  background: '#ffffff',
+  foreground: '#1f2328',
+  cursor: '#0969da',
+  selectionBackground: '#b6e3ff',
+  black: '#1f2328',
+  red: '#cf222e',
+  green: '#1a7f37',
+  yellow: '#9a6700',
+  blue: '#0969da',
+  magenta: '#8250df',
+  cyan: '#0969da',
+  white: '#1f2328',
+  brightBlack: '#656d76',
+  brightRed: '#a40e26',
+  brightGreen: '#2da44e',
+  brightYellow: '#bf8700',
+  brightBlue: '#0550ae',
+  brightMagenta: '#6639ba',
+  brightCyan: '#0550ae',
+  brightWhite: '#ffffff',
+}
+
+function isLightAppTheme(): boolean {
+  const theme = document.documentElement.getAttribute('data-theme')
+  if (theme === 'light') return true
+  if (theme === 'dark') return false
+  return window.matchMedia('(prefers-color-scheme: light)').matches
+}
+
+function getXtermTheme() {
+  return isLightAppTheme() ? LIGHT_THEME : DARK_THEME
+}
+
 /** Shell-escape a file path so spaces and special chars are safe for terminal paste */
 function shellEscapePath(p: string): string {
   if (/^[a-zA-Z0-9._\-\/]+$/.test(p)) return p
@@ -80,7 +114,7 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
       cursorBlink: true,
       cursorStyle: 'bar',
       cursorWidth: 2,
-      theme: DARK_THEME,
+      theme: getXtermTheme(),
       allowProposedApi: true,
       rightClickSelectsWord: true,
       scrollback: 10000,
@@ -93,7 +127,6 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
 
     termRef.current = term
     fitAddonRef.current = fitAddon
-
     // Helper to fit terminal while preserving scroll position
     // Skips fit if cols/rows haven't changed to prevent unnecessary redraws (flickering)
     let lastCols = term.cols
@@ -366,7 +399,40 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
     })
     ro.observe(containerRef.current)
 
+    const onFind = (e: KeyboardEvent) => {
+      if (!active) return
+      const inThis = containerRef.current?.contains(document.activeElement)
+        || document.activeElement?.classList.contains('xterm-helper-textarea')
+      if (!inThis && document.activeElement?.closest('.xterminal-container') !== containerRef.current) return
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault()
+        const query = window.prompt('Find in terminal:')
+        if (!query) return
+        const needle = query.toLowerCase()
+        const buf = term.buffer.active
+        let foundLine = -1
+        for (let i = buf.length - 1; i >= 0; i--) {
+          const line = buf.getLine(i)
+          if (line && line.translateToString(true).toLowerCase().includes(needle)) {
+            foundLine = i
+            break
+          }
+        }
+        if (foundLine >= 0) {
+          term.scrollToLine(Math.max(0, foundLine - 2))
+        }
+      }
+    }
+    window.addEventListener('keydown', onFind)
+
+    const themeObserver = new MutationObserver(() => {
+      term.options.theme = getXtermTheme()
+    })
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+
     return () => {
+      themeObserver.disconnect()
+      window.removeEventListener('keydown', onFind)
       ro.disconnect()
       if (resizeTimer) clearTimeout(resizeTimer)
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
@@ -380,7 +446,7 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
       termRef.current = null
       fitAddonRef.current = null
     }
-  }, [sessionId])
+  }, [sessionId, active])
 
   // Re-fit when tab becomes active
   useEffect(() => {

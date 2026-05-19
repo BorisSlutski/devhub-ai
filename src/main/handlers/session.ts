@@ -3,7 +3,15 @@ import { join } from 'path'
 import { readdirSync, statSync, mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs'
 import { execSync, exec, ChildProcess } from 'child_process'
 import { homedir } from 'os'
-import { ptyManager } from '../pty-manager'
+import {
+  ptyCreateSession,
+  ptyWrite,
+  ptyResize,
+  ptyDestroy,
+  ptyGetSessions,
+} from '../pty-backend'
+import { runSystemCheck } from '../system-check'
+import { checkForUpdates, downloadUpdate, getUpdateStatus, installUpdate } from '../updater'
 import { loadState } from '../store'
 import { cleanupSessionRtkFlag } from '../rtk-manager'
 import { promptEnhancer } from '../prompt-enhancer'
@@ -216,7 +224,7 @@ export function registerSessionHandlers() {
       command = `claude --resume ${opts.resumeClaudeId}${modelFlag}${permFlag}`
     }
 
-    const result = ptyManager.createSession(
+    const result = await ptyCreateSession(
       opts.sessionId,
       opts.folderName,
       opts.folderPath,
@@ -246,20 +254,20 @@ export function registerSessionHandlers() {
     const cancelled = workspaceInitTracker.cancel(sessionId)
     if (!cancelled) {
       // If tracker not found, the init may already be done — try to destroy the PTY
-      ptyManager.destroySession(sessionId)
+      void ptyDestroy(sessionId)
     }
   })
 
   ipcMain.on('pty-write', (_event, sessionId: string, data: string) => {
-    ptyManager.write(sessionId, data)
+    ptyWrite(sessionId, data)
   })
 
   ipcMain.on('pty-resize', (_event, sessionId: string, cols: number, rows: number) => {
-    ptyManager.resize(sessionId, cols, rows)
+    ptyResize(sessionId, cols, rows)
   })
 
-  ipcMain.handle('pty-destroy', (_event, sessionId: string) => {
-    ptyManager.destroySession(sessionId)
+  ipcMain.handle('pty-destroy', async (_event, sessionId: string) => {
+    await ptyDestroy(sessionId)
     statuslineWatcher.unwatchSession(sessionId)
     cleanupSessionRtkFlag(sessionId)
     promptEnhancer.clearSession(sessionId)
@@ -314,7 +322,7 @@ export function registerSessionHandlers() {
   })
 
   ipcMain.handle('pty-list-sessions', () => {
-    return ptyManager.getSessions()
+    return ptyGetSessions()
   })
 
   // Active sessions (auto-resume)
@@ -341,6 +349,34 @@ export function registerSessionHandlers() {
   ipcMain.handle('active-sessions-get-active-id', () => {
     return activeSessions.getActiveId()
   })
+
+  ipcMain.handle('active-sessions-update-meta', (_event, id: string, meta: { nickname?: string; accentColor?: string }) => {
+    activeSessions.updateMeta(id, meta)
+  })
+
+  ipcMain.handle('active-sessions-set-order', (_event, order: string[]) => {
+    activeSessions.setSessionOrder(order)
+  })
+
+  ipcMain.handle('active-sessions-get-ui', () => {
+    return activeSessions.getUiState()
+  })
+
+  ipcMain.handle('active-sessions-set-ui', (_event, partial: {
+    sessionOrder?: string[]
+    gridMode?: boolean
+    gridLayout?: string
+    gridSessionIds?: string[]
+  }) => {
+    activeSessions.setUiState(partial as any)
+  })
+
+  ipcMain.handle('system-check', () => runSystemCheck())
+
+  ipcMain.handle('app-check-updates', () => checkForUpdates())
+  ipcMain.handle('app-download-update', () => downloadUpdate())
+  ipcMain.handle('app-install-update', () => { installUpdate() })
+  ipcMain.handle('app-get-update-status', () => getUpdateStatus())
 
   // Session history
   ipcMain.handle('session-history-scan', (_event, folderPath: string, folderName: string) => {

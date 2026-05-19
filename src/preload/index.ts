@@ -3,16 +3,19 @@ import type {
   AppState, ProcessStatus, Project, WorkspaceFolder,
   AgentInfo, PipelineRun, PipelineConfig,
   EnhancerConfig, EnhanceResult, EnhancerSessionCost,
-  IpcResult, GitInfo, GitStatus, BranchList, WorktreeResult,
+  IpcResult, GitInfo, GitStatus, GitSyncStatus, GitPullResult, GitPullAllResult,
+  GitPullFinishedEvent, GitPullBatchFinishedEvent, GitPullStartResult,
+  BranchList, WorktreeResult,
   PtyCreateOptions, PtyCreateResult, PtySessionInfo,
   DirectoryEntry, FileContent, FileSearchResult, FileSearchEntry, DiffResult,
   SystemPortInfo, RtkStatus, RtkToggleResult, RtkGainStats,
   BrowserEvent, ActiveSession, ClaudeSessionInfo, SessionTitle,
-  McpConfigEntry, SkillEntry, CreateCommandOptions, SaveTempImageOptions,
+  McpConfigEntry, McpRawFileResult, SkillEntry, CreateCommandOptions, SaveTempImageOptions,
   StatuslineData, RecoverableSession, ScrollbackRestoreResult, ResourceSnapshot,
   InitProgress, NotificationSettings,
   SessionPreset, SessionPresetCreate, PresetLaunchOptions, PresetLaunchResult,
   SessionSummary, SaveSummaryOptions,
+  AirflowDiscoverResult, AirflowHealthResult, AirflowDag, AirflowDagRun, AirflowTaskInstance,
 } from '../shared/ipc-types'
 
 const api = {
@@ -49,6 +52,26 @@ const api = {
     ipcRenderer.invoke('get-git-info', folderPath),
   getGitStatus: (folderPath: string): Promise<GitStatus> =>
     ipcRenderer.invoke('get-git-status', folderPath),
+  getGitSyncStatus: (folderPath: string, fetch?: boolean): Promise<GitSyncStatus> =>
+    ipcRenderer.invoke('get-git-sync-status', folderPath, fetch ?? false),
+  pullFolderToBase: (folderPath: string): Promise<GitPullResult> =>
+    ipcRenderer.invoke('pull-folder-to-base', folderPath),
+  pullAllFoldersToBase: (folderPaths: string[]): Promise<GitPullAllResult[]> =>
+    ipcRenderer.invoke('pull-all-folders-to-base', folderPaths),
+  startPullFolderToBase: (folderPath: string): Promise<GitPullStartResult> =>
+    ipcRenderer.invoke('start-pull-folder-to-base', folderPath),
+  startPullAllFoldersToBase: (folderPaths: string[]): Promise<GitPullStartResult> =>
+    ipcRenderer.invoke('start-pull-all-folders-to-base', folderPaths),
+  onGitPullFinished: (callback: (event: GitPullFinishedEvent) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, data: GitPullFinishedEvent) => callback(data)
+    ipcRenderer.on('git-pull-finished', handler)
+    return () => ipcRenderer.removeListener('git-pull-finished', handler)
+  },
+  onGitPullBatchFinished: (callback: (event: GitPullBatchFinishedEvent) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, data: GitPullBatchFinishedEvent) => callback(data)
+    ipcRenderer.on('git-pull-batch-finished', handler)
+    return () => ipcRenderer.removeListener('git-pull-batch-finished', handler)
+  },
   listBranches: (folderPath: string): Promise<BranchList> =>
     ipcRenderer.invoke('list-branches', folderPath),
   checkoutBranch: (folderPath: string, branchName: string): Promise<IpcResult> =>
@@ -189,6 +212,16 @@ const api = {
     ipcRenderer.invoke('mcp-check-status'),
   mcpSaveConfig: (filePath: string, servers: Record<string, any>): Promise<IpcResult> =>
     ipcRenderer.invoke('mcp-save-config', filePath, servers),
+  mcpReadRawFile: (filePath: string): Promise<McpRawFileResult> =>
+    ipcRenderer.invoke('mcp-read-raw-file', filePath),
+  mcpSaveRawFile: (filePath: string, content: string): Promise<IpcResult> =>
+    ipcRenderer.invoke('mcp-save-raw-file', filePath, content),
+  mcpMergeServers: (
+    filePath: string,
+    servers: Record<string, any>,
+    mode: 'merge' | 'replace'
+  ): Promise<IpcResult> =>
+    ipcRenderer.invoke('mcp-merge-servers', filePath, servers, mode),
   skillsList: (projectPath?: string): Promise<SkillEntry[]> =>
     ipcRenderer.invoke('skills-list', projectPath),
   createCommand: (opts: CreateCommandOptions): Promise<IpcResult & { path?: string }> =>
@@ -219,6 +252,36 @@ const api = {
     ipcRenderer.invoke('active-sessions-set-active-id', id),
   activeSessionsGetActiveId: (): Promise<string | null> =>
     ipcRenderer.invoke('active-sessions-get-active-id'),
+  activeSessionsUpdateMeta: (id: string, meta: { nickname?: string; accentColor?: string }): Promise<void> =>
+    ipcRenderer.invoke('active-sessions-update-meta', id, meta),
+  activeSessionsSetOrder: (order: string[]): Promise<void> =>
+    ipcRenderer.invoke('active-sessions-set-order', order),
+  activeSessionsGetUi: (): Promise<{
+    sessionOrder: string[]
+    gridMode: boolean
+    gridLayout: string
+    gridSessionIds: string[]
+  }> => ipcRenderer.invoke('active-sessions-get-ui'),
+  activeSessionsSetUi: (partial: {
+    sessionOrder?: string[]
+    gridMode?: boolean
+    gridLayout?: string
+    gridSessionIds?: string[]
+  }): Promise<void> => ipcRenderer.invoke('active-sessions-set-ui', partial),
+
+  systemCheck: (): Promise<{
+    node: { ok: boolean; version: string | null }
+    claude: { ok: boolean; version: string | null }
+    git: { ok: boolean; version: string | null }
+  }> => ipcRenderer.invoke('system-check'),
+
+  appCheckUpdates: (): Promise<{ status: string; error: string | null; version: string | null; percent: number }> =>
+    ipcRenderer.invoke('app-check-updates'),
+  appDownloadUpdate: (): Promise<{ status: string; error: string | null; version: string | null; percent: number }> =>
+    ipcRenderer.invoke('app-download-update'),
+  appInstallUpdate: (): Promise<void> => ipcRenderer.invoke('app-install-update'),
+  appGetUpdateStatus: (): Promise<{ status: string; error: string | null; version: string | null; percent: number }> =>
+    ipcRenderer.invoke('app-get-update-status'),
 
   // Session history
   sessionHistoryScan: (folderPath: string, folderName: string): Promise<ClaudeSessionInfo[]> =>
@@ -327,6 +390,41 @@ const api = {
   dbListDatabases: (connectionId: string): Promise<{
     success: boolean; databases: string[]; error?: string;
   }> => ipcRenderer.invoke('db-list-databases', connectionId),
+
+  // Airflow (wix-astronomer-dags local Astro)
+  airflowDiscover: (scanPath: string): Promise<AirflowDiscoverResult> =>
+    ipcRenderer.invoke('airflow-discover', scanPath),
+  airflowHealth: (repoRoot: string): Promise<AirflowHealthResult> =>
+    ipcRenderer.invoke('airflow-health', repoRoot),
+  airflowListDags: (repoRoot: string): Promise<{ success: boolean; dags: AirflowDag[]; error?: string }> =>
+    ipcRenderer.invoke('airflow-list-dags', repoRoot),
+  airflowPatchDag: (repoRoot: string, dagId: string, isPaused: boolean): Promise<IpcResult> =>
+    ipcRenderer.invoke('airflow-patch-dag', repoRoot, dagId, isPaused),
+  airflowTriggerDag: (
+    repoRoot: string,
+    dagId: string,
+    confJson?: string,
+  ): Promise<IpcResult & { dagRunId?: string }> =>
+    ipcRenderer.invoke('airflow-trigger-dag', repoRoot, dagId, confJson),
+  airflowListDagRuns: (
+    repoRoot: string,
+    dagId: string,
+  ): Promise<{ success: boolean; runs: AirflowDagRun[]; error?: string }> =>
+    ipcRenderer.invoke('airflow-list-dag-runs', repoRoot, dagId),
+  airflowListTaskInstances: (
+    repoRoot: string,
+    dagId: string,
+    dagRunId: string,
+  ): Promise<{ success: boolean; tasks: AirflowTaskInstance[]; error?: string }> =>
+    ipcRenderer.invoke('airflow-list-task-instances', repoRoot, dagId, dagRunId),
+  airflowGetTaskLog: (
+    repoRoot: string,
+    dagId: string,
+    dagRunId: string,
+    taskId: string,
+    tryNumber?: number,
+  ): Promise<{ success: boolean; log: string; error?: string }> =>
+    ipcRenderer.invoke('airflow-get-task-log', repoRoot, dagId, dagRunId, taskId, tryNumber),
 }
 
 contextBridge.exposeInMainWorld('api', api)

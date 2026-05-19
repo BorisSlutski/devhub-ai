@@ -56,7 +56,7 @@ describe('SettingsModal', () => {
     const onSave = vi.fn()
     render(<SettingsModal {...defaultProps} onSave={onSave} />)
     fireEvent.click(screen.getByText('Save'))
-    expect(onSave).toHaveBeenCalledWith('/path', 50, false, false, false, '')
+    expect(onSave).toHaveBeenCalledWith('/path', 50, false, false, false, '', false)
   })
 
   it('cancel button calls onClose', () => {
@@ -141,7 +141,7 @@ describe('SettingsModal', () => {
     fireEvent.change(input, { target: { value: 'I understand the risks' } })
     fireEvent.click(screen.getByText('Confirm'))
     fireEvent.click(screen.getByText('Save'))
-    expect(onSave).toHaveBeenCalledWith('/path', 50, false, true, false, '')
+    expect(onSave).toHaveBeenCalledWith('/path', 50, false, true, false, '', false)
   })
 
   it('confirmation text is case-sensitive', () => {

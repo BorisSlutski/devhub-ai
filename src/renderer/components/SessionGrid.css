@@ -1,0 +1,104 @@
+.session-grid-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  outline: none;
+}
+
+.session-grid-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.session-grid-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.session-grid-layout-select,
+.session-grid-add-select {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.session-grid {
+  flex: 1;
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  min-height: 0;
+}
+
+.session-grid-cell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-primary);
+  cursor: pointer;
+}
+
+.session-grid-cell.focused {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.session-grid-cell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.session-grid-cell-title {
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-grid-cell-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.session-grid-cell-close:hover {
+  color: var(--red);
+}
+
+.session-grid-cell-terminal {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.session-grid-cell-terminal .xterminal-container {
+  position: absolute;
+  inset: 0;
+}
+
+.session-grid-empty {
+  padding: 48px;
+  text-align: center;
+  color: var(--text-muted);
+}
