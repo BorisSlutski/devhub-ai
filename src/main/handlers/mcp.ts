@@ -3,6 +3,7 @@ import { join } from 'path'
 import { readdirSync, statSync, mkdirSync, existsSync, writeFileSync, readFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { execFile } from 'child_process'
+import { getShellPath } from '../process-manager'
 
 export function registerMcpHandlers() {
   console.log('[MCP] registerMcpHandlers called')
@@ -64,7 +65,7 @@ export function registerMcpHandlers() {
 
       const child = execFile(claudeBin, ['mcp', 'list'], {
         timeout: 30000,
-        env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+        env: { ...process.env, PATH: getShellPath(), NO_COLOR: '1', TERM: 'dumb' },
       }, (err, stdout, stderr) => {
         // Combine stdout + stderr — claude may write to either
         const combined = stripAnsi((stdout || '') + '\n' + (stderr || ''))

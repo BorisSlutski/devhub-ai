@@ -84,6 +84,7 @@ export function App() {
 
   const {
     sessions: claudeSessions,
+    lastCreatedSessionId: lastCreatedClaudeSessionId,
     startSession: handleStartClaudeSession,
     resumeSession: handleResumeClaudeSession,
     openPipelineSession: handleOpenPipelineSession,
@@ -476,6 +477,7 @@ export function App() {
         <ErrorBoundary name="Claude Sessions">
           <ClaudeSessionsView
             sessions={claudeSessions}
+            lastCreatedSessionId={lastCreatedClaudeSessionId}
             rtkEnabled={state.rtkEnabled ?? false}
             chatInputEnabled={state.chatInputEnabled ?? true}
             scanPath={state.scanPath}

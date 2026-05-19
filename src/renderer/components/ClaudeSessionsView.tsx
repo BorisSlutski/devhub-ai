@@ -61,6 +61,7 @@ interface HistoryRecord {
 
 interface Props {
   sessions: Session[]
+  lastCreatedSessionId?: string | null
   rtkEnabled: boolean
   chatInputEnabled: boolean
   scanPath: string
@@ -76,7 +77,7 @@ interface Props {
 
 type SidePanel = 'none' | 'files' | 'file-view' | 'changes' | 'search' | 'browser' | 'pipeline' | 'mcp' | 'history' | 'resources' | 'presets' | 'summaries'
 
-export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, scanPath, onNewSession, onCloseSession, onResumeSession, onResumeFromHistory, onOpenPipelineSession, onLaunchPreset, onWaitingSessionsChange }: Props) {
+export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled, chatInputEnabled, scanPath, onNewSession, onCloseSession, onResumeSession, onResumeFromHistory, onOpenPipelineSession, onLaunchPreset, onWaitingSessionsChange }: Props) {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [sidePanel, setSidePanel] = useState<SidePanel>('none')
   const [viewingFile, setViewingFile] = useState<string | null>(null)
@@ -139,6 +140,13 @@ export function ClaudeSessionsView({ sessions, rtkEnabled, chatInputEnabled, sca
       }
     }
   }, [sessions])
+
+  // Auto-switch to a newly created session
+  useEffect(() => {
+    if (lastCreatedSessionId && sessions.find(s => s.id === lastCreatedSessionId)) {
+      setActiveSessionId(lastCreatedSessionId)
+    }
+  }, [lastCreatedSessionId, sessions])
 
   useEffect(() => {
     if (sessions.length === 0) {
