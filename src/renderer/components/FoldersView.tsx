@@ -288,7 +288,8 @@ export function FoldersView({
   const metaQueueRef = useRef<string[]>([])
   const metaQueuedRef = useRef<Set<string>>(new Set())
   const metaInFlightRef = useRef(0)
-  const META_CONCURRENCY = 4
+  const META_CONCURRENCY = 2
+  const REFRESH_CONCURRENCY = 3
 
   useEffect(() => {
     setLoading(true)
@@ -391,7 +392,11 @@ export function FoldersView({
     setBulkSummary(null)
     metaCache.clear()
     try {
-      await Promise.all(filtered.map((f) => refreshOne(f.path)))
+      const paths = filtered.map((f) => f.path)
+      for (let i = 0; i < paths.length; i += REFRESH_CONCURRENCY) {
+        const batch = paths.slice(i, i + REFRESH_CONCURRENCY)
+        await Promise.all(batch.map((path) => refreshOne(path)))
+      }
       setBulkSummary(`Refreshed ${filtered.length} folder(s)`)
     } finally {
       setBulkRefreshing(false)

@@ -200,6 +200,10 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  try {
+    const { flushSaveStateSync } = require('./store')
+    flushSaveStateSync()
+  } catch { /* store may not be loaded */ }
   resourceMonitor.stop()
   processManager.stopAll()
   ptyManager.destroyAll()

@@ -395,6 +395,76 @@ function isProjectDir(dirPath: string): { isProject: boolean; pkgJson: PackageJs
 let _scanDirsVisited = 0
 let _scanLastLog = 0
 
+/** Yield the main-process event loop every N directories so UI stays responsive. */
+const SCAN_YIELD_EVERY = 48
+
+function yieldEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
+}
+
+async function scanRecursiveAsync(
+  dirPath: string,
+  depth: number,
+  maxDepth: number,
+  projects: Project[],
+): Promise<void> {
+  if (depth > maxDepth) return
+
+  let entries: string[]
+  try {
+    entries = readdirSync(dirPath)
+  } catch {
+    return
+  }
+
+  _scanDirsVisited++
+  if (_scanDirsVisited - _scanLastLog >= 500) {
+    console.log(`[scanner] progress: ${_scanDirsVisited} dirs visited, ${projects.length} projects found, depth=${depth}, current: ${dirPath}`)
+    _scanLastLog = _scanDirsVisited
+  }
+  if (_scanDirsVisited % SCAN_YIELD_EVERY === 0) {
+    await yieldEventLoop()
+  }
+
+  for (const entry of entries) {
+    const fullPath = join(dirPath, entry)
+    try {
+      if (!statSync(fullPath).isDirectory()) continue
+    } catch {
+      continue
+    }
+
+    if (entry.startsWith('.') || entry.startsWith('bazel-') || SKIP_DIRS.has(entry)) continue
+
+    const { isProject, pkgJson } = isProjectDir(fullPath)
+
+    if (isProject) {
+      const hasDockerCompose = existsSync(join(fullPath, 'docker-compose.yml')) ||
+                               existsSync(join(fullPath, 'docker-compose.yaml'))
+      const hasMakefile = existsSync(join(fullPath, 'Makefile'))
+
+      let runCommand = detectRunCommand(pkgJson, fullPath)
+      if (!runCommand && hasDockerCompose) runCommand = 'docker-compose up'
+      if (!runCommand && hasMakefile) runCommand = 'make'
+
+      projects.push({
+        id: randomUUID(),
+        name: pkgJson?.name || entry,
+        path: fullPath,
+        tags: [],
+        description: pkgJson?.description || '',
+        techStack: detectTechStack(pkgJson, fullPath),
+        runCommand,
+        port: detectPort(pkgJson, fullPath),
+        lastOpened: null,
+        hidden: false
+      })
+    } else {
+      await scanRecursiveAsync(fullPath, depth + 1, maxDepth, projects)
+    }
+  }
+}
+
 function scanRecursive(dirPath: string, depth: number, maxDepth: number, projects: Project[]): void {
   if (depth > maxDepth) return
 
@@ -459,5 +529,20 @@ export function scanWorkspace(scanPath: string, maxDepth: number = DEFAULT_MAX_D
   const projects: Project[] = []
   scanRecursive(scanPath, 0, maxDepth, projects)
   console.log(`[scanner] scanWorkspace DONE — ${projects.length} projects, ${_scanDirsVisited} dirs visited, ${Date.now() - t0}ms`)
+  return projects.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** Non-blocking workspace scan — yields to the event loop during traversal. */
+export async function scanWorkspaceAsync(
+  scanPath: string,
+  maxDepth: number = DEFAULT_MAX_DEPTH,
+): Promise<Project[]> {
+  console.log('[scanner] scanWorkspaceAsync called — path:', scanPath, 'maxDepth:', maxDepth)
+  _scanDirsVisited = 0
+  _scanLastLog = 0
+  const t0 = Date.now()
+  const projects: Project[] = []
+  await scanRecursiveAsync(scanPath, 0, maxDepth, projects)
+  console.log(`[scanner] scanWorkspaceAsync DONE — ${projects.length} projects, ${_scanDirsVisited} dirs visited, ${Date.now() - t0}ms`)
   return projects.sort((a, b) => a.name.localeCompare(b.name))
 }

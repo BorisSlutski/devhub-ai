@@ -19,7 +19,11 @@ vi.mock('fs', () => ({
   mkdirSync: vi.fn(),
 }))
 
-import { loadState, saveState } from './store'
+vi.mock('fs/promises', () => ({
+  writeFile: vi.fn().mockResolvedValue(undefined),
+}))
+
+import { loadState, saveState, flushSaveStateSync } from './store'
 
 const storePath = '/tmp/test-devhub-ai-userData/state.json'
 
@@ -65,11 +69,12 @@ describe('store', () => {
     expect(state.scanPath).toMatch(/Workspace$/)
   })
 
-  it('saveState() writes JSON to correct path', () => {
+  it('flushSaveStateSync() writes JSON to correct path', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true)
     const state = { projects: [], tags: [], scanPath: '/foo' }
 
     saveState(state)
+    flushSaveStateSync()
 
     expect(fs.writeFileSync).toHaveBeenCalledWith(
       storePath,

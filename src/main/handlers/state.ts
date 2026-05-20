@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { loadState, saveState } from '../store'
-import { scanWorkspace } from '../scanner'
+import { scanWorkspaceAsync } from '../scanner'
 import { AppState, Project } from '../../shared/types'
 
 export function registerStateHandlers() {
@@ -11,10 +11,10 @@ export function registerStateHandlers() {
     return true
   })
 
-  ipcMain.handle('scan-workspace', (_event, scanPath: string, maxDepth?: number) => {
+  ipcMain.handle('scan-workspace', async (_event, scanPath: string, maxDepth?: number) => {
     console.log('[scan-workspace] handler called — scanPath:', scanPath, 'maxDepth:', maxDepth)
     const t0 = Date.now()
-    const result = scanWorkspace(scanPath, maxDepth)
+    const result = await scanWorkspaceAsync(scanPath, maxDepth)
     console.log('[scan-workspace] handler done —', result.length, 'projects in', Date.now() - t0, 'ms')
     return result
   })

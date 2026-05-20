@@ -53,7 +53,7 @@ export function registerGitHandlers() {
       const cached = getCachedFolderMeta(folderPath)
       if (cached) return cached
     }
-    const meta = buildGitFolderMeta(folderPath, fetch)
+    const meta = await buildGitFolderMeta(folderPath, fetch)
     setCachedFolderMeta(folderPath, meta)
     return meta
   })
@@ -63,7 +63,7 @@ export function registerGitHandlers() {
     if (cached) {
       return { gitBranch: cached.gitBranch, gitRemote: cached.gitRemote }
     }
-    const meta = buildGitFolderMeta(folderPath, false)
+    const meta = await buildGitFolderMeta(folderPath, false)
     setCachedFolderMeta(folderPath, meta)
     return { gitBranch: meta.gitBranch, gitRemote: meta.gitRemote }
   })
@@ -154,8 +154,8 @@ export function registerGitHandlers() {
 
   ipcMain.handle('list-branches', async (_event, folderPath: string) => {
     try {
-      execSync('git rev-parse --is-inside-work-tree', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
+      await execAsync('git rev-parse --is-inside-work-tree', {
+        cwd: folderPath, encoding: 'utf-8', timeout: 3000,
       })
     } catch {
       return { current: null, branches: [] }
@@ -163,16 +163,18 @@ export function registerGitHandlers() {
 
     let current: string | null = null
     try {
-      current = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
-      }).trim()
+      const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', {
+        cwd: folderPath, encoding: 'utf-8', timeout: 3000,
+      })
+      current = stdout.trim()
     } catch { /* detached HEAD */ }
 
     const branches: string[] = []
     try {
-      const raw = execSync('git branch --format="%(refname:short)"', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore']
-      }).trim()
+      const { stdout } = await execAsync('git branch --format="%(refname:short)"', {
+        cwd: folderPath, encoding: 'utf-8', timeout: 5000,
+      })
+      const raw = stdout.trim()
       if (raw) {
         for (const b of raw.split('\n')) {
           const name = b.trim()
@@ -200,7 +202,7 @@ export function registerGitHandlers() {
       branch?: string | null
     }> = []
     for (const folderPath of folderPaths) {
-      const result = pullFolderToBase(folderPath)
+      const result = await pullFolderToBase(folderPath)
       results.push({
         path: folderPath,
         success: result.success,
@@ -233,26 +235,26 @@ export function registerGitHandlers() {
 
   ipcMain.handle('start-pull-folder-to-base', (event, folderPath: string) => {
     const sender = event.sender
-    setImmediate(() => {
-      const result = pullFolderToBase(folderPath)
+    void (async () => {
+      const result = await pullFolderToBase(folderPath)
       emitPullFinished(sender, {
         path: folderPath,
         success: result.success,
         error: result.error,
         branch: result.branch,
       })
-    })
+    })()
     return { started: true }
   })
 
   ipcMain.handle('start-pull-all-folders-to-base', (event, folderPaths: string[]) => {
     const sender = event.sender
     const paths = [...folderPaths]
-    setImmediate(async () => {
+    void (async () => {
       let ok = 0
       let failed = 0
       for (const folderPath of paths) {
-        const result = pullFolderToBase(folderPath)
+        const result = await pullFolderToBase(folderPath)
         if (result.success) ok++
         else failed++
         emitPullFinished(sender, {
@@ -263,22 +265,22 @@ export function registerGitHandlers() {
         })
       }
       emitPullBatchFinished(sender, { total: paths.length, ok, failed })
-    })
+    })()
     return { started: true, count: paths.length }
   })
 
   ipcMain.handle('checkout-branch', async (_event, folderPath: string, branchName: string) => {
     try {
-      execSync('git rev-parse --is-inside-work-tree', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
+      await execAsync('git rev-parse --is-inside-work-tree', {
+        cwd: folderPath, encoding: 'utf-8', timeout: 3000,
       })
     } catch {
       return { success: false, error: 'Not a git repository' }
     }
 
     try {
-      execSync(`git checkout "${branchName}"`, {
-        cwd: folderPath, encoding: 'utf-8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe']
+      await execAsync(`git checkout "${branchName}"`, {
+        cwd: folderPath, encoding: 'utf-8', timeout: 10000,
       })
       return { success: true }
     } catch (err: unknown) {
@@ -290,35 +292,30 @@ export function registerGitHandlers() {
     }
   })
 
-  ipcMain.handle('open-in-ide', (_event, projectPath: string, ide: 'cursor' | 'zed') => {
-    try {
-      if (ide === 'cursor') {
-        execSync(`cursor "${projectPath}"`, { stdio: 'ignore' })
-      } else {
-        execSync(`zed "${projectPath}"`, { stdio: 'ignore' })
-      }
-      return true
-    } catch {
+  ipcMain.handle('open-in-ide', async (_event, projectPath: string, ide: 'cursor' | 'zed') => {
+    const launch = async (cmd: string) => {
       try {
-        if (ide === 'cursor') {
-          execSync(`open -a "Cursor" "${projectPath}"`, { stdio: 'ignore' })
-        } else {
-          execSync(`open -a "Zed" "${projectPath}"`, { stdio: 'ignore' })
-        }
+        await execAsync(cmd, { timeout: 5000 })
         return true
       } catch {
         return false
       }
     }
+    if (ide === 'cursor') {
+      if (await launch(`cursor "${projectPath}"`)) return true
+      return launch(`open -a "Cursor" "${projectPath}"`)
+    }
+    if (await launch(`zed "${projectPath}"`)) return true
+    return launch(`open -a "Zed" "${projectPath}"`)
   })
 
   ipcMain.handle('open-in-finder', (_event, projectPath: string) => {
     shell.showItemInFolder(projectPath)
   })
 
-  ipcMain.handle('open-in-terminal', (_event, projectPath: string) => {
+  ipcMain.handle('open-in-terminal', async (_event, projectPath: string) => {
     try {
-      execSync(`open -a "Terminal" "${projectPath}"`, { stdio: 'ignore' })
+      await execAsync(`open -a "Terminal" "${projectPath}"`, { timeout: 5000 })
       return true
     } catch {
       return false

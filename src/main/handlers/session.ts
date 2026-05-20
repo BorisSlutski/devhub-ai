@@ -20,6 +20,7 @@ import { ensureDevHubAIClaudeMd } from '../claude-md'
 import { statuslineWatcher } from '../statusline-watcher'
 import { workspaceInitTracker } from '../workspace-init-tracker'
 import { notificationManager } from '../notification-manager'
+import { isGitRepo, getCurrentBranch, gitFetchOrigin } from '../git-sync'
 
 let mainWindowRef: Electron.BrowserWindow | null = null
 
@@ -111,31 +112,19 @@ export function registerSessionHandlers() {
     if (tracker.isCancelled()) return { success: false, error: 'Cancelled' }
 
     if (worktreePath) {
-      try {
-        branchName = execSync('git rev-parse --abbrev-ref HEAD', {
-          cwd: worktreePath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
-        }).trim()
-      } catch { /* ignore */ }
+      branchName = await getCurrentBranch(worktreePath)
     }
 
     if (opts.useWorktree && !worktreePath) {
-      let isGitRepo = false
-      try {
-        execSync('git rev-parse --is-inside-work-tree', {
-          cwd: opts.folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
-        })
-        isGitRepo = true
-      } catch { /* not a git repo */ }
+      const folderIsGit = await isGitRepo(opts.folderPath)
 
-      if (isGitRepo) {
+      if (folderIsGit) {
         // Stage: fetching
         tracker.advance('fetching', 'Fetching latest changes...')
         if (tracker.isCancelled()) return { success: false, error: 'Cancelled' }
 
         try {
-          execSync('git fetch --quiet', {
-            cwd: opts.folderPath, encoding: 'utf-8', timeout: 15000, stdio: ['ignore', 'pipe', 'ignore']
-          })
+          await gitFetchOrigin(opts.folderPath)
         } catch { /* fetch failure is non-fatal */ }
 
         // Stage: creating_worktree
@@ -143,9 +132,7 @@ export function registerSessionHandlers() {
         if (tracker.isCancelled()) return { success: false, error: 'Cancelled' }
 
         try {
-          const baseBranch = execSync('git rev-parse --abbrev-ref HEAD', {
-            cwd: opts.folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
-          }).trim()
+          const baseBranch = (await getCurrentBranch(opts.folderPath)) ?? 'main'
 
           const timestamp = Date.now().toString(36)
           const slug = opts.folderName.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()

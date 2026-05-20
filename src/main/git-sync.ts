@@ -1,5 +1,29 @@
-import { execFileSync, execSync } from 'child_process'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import type { GitFolderMeta, GitSyncState, GitSyncStatus } from '../shared/ipc-types'
+
+const execFileAsync = promisify(execFile)
+
+type GitExecOpts = { cwd: string; timeout?: number }
+
+async function gitStdout(args: string[], opts: GitExecOpts): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd: opts.cwd,
+    encoding: 'utf-8',
+    timeout: opts.timeout ?? 3000,
+    maxBuffer: 1024 * 1024,
+  })
+  return stdout.trim()
+}
+
+async function gitOk(args: string[], opts: GitExecOpts): Promise<boolean> {
+  try {
+    await gitStdout(args, opts)
+    return true
+  } catch {
+    return false
+  }
+}
 
 /** Git ref names safe for argv (branch names from symbolic-ref / origin/HEAD). */
 export function isSafeRefName(ref: string): boolean {
@@ -26,55 +50,25 @@ export function deriveSyncState(
   return 'synced'
 }
 
-export function isGitRepo(folderPath: string): boolean {
-  try {
-    execSync('git rev-parse --is-inside-work-tree', {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    return true
-  } catch {
-    return false
-  }
+export async function isGitRepo(folderPath: string): Promise<boolean> {
+  return gitOk(['rev-parse', '--is-inside-work-tree'], { cwd: folderPath })
 }
 
-export function getCurrentBranch(folderPath: string): string | null {
+export async function getCurrentBranch(folderPath: string): Promise<string | null> {
   try {
-    return execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
+    return await gitStdout(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: folderPath })
   } catch {
     return null
   }
 }
 
-export function hasOriginRemote(folderPath: string): boolean {
-  try {
-    execSync('git remote get-url origin', {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    return true
-  } catch {
-    return false
-  }
+export async function hasOriginRemote(folderPath: string): Promise<boolean> {
+  return gitOk(['remote', 'get-url', 'origin'], { cwd: folderPath })
 }
 
-export function getOriginRemoteUrl(folderPath: string): string | null {
+export async function getOriginRemoteUrl(folderPath: string): Promise<string | null> {
   try {
-    const remote = execSync('git remote get-url origin', {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
+    const remote = await gitStdout(['remote', 'get-url', 'origin'], { cwd: folderPath })
     if (remote.includes('github.com')) {
       return remote
         .replace(/^git@github\.com:/, 'https://github.com/')
@@ -86,88 +80,62 @@ export function getOriginRemoteUrl(folderPath: string): string | null {
   }
 }
 
-export function resolveBaseBranch(folderPath: string): string | null {
+export async function resolveBaseBranch(folderPath: string): Promise<string | null> {
   try {
-    const remoteHead = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
+    const remoteHead = await gitStdout(['symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: folderPath })
     return remoteHead.replace('refs/remotes/origin/', '')
   } catch {
-    try {
-      execSync('git rev-parse --verify origin/main', {
-        cwd: folderPath,
-        encoding: 'utf-8',
-        timeout: 3000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      })
+    if (await gitOk(['rev-parse', '--verify', 'origin/main'], { cwd: folderPath })) {
       return 'main'
-    } catch {
-      try {
-        execSync('git rev-parse --verify origin/master', {
-          cwd: folderPath,
-          encoding: 'utf-8',
-          timeout: 3000,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        })
-        return 'master'
-      } catch {
-        return null
-      }
     }
+    if (await gitOk(['rev-parse', '--verify', 'origin/master'], { cwd: folderPath })) {
+      return 'master'
+    }
+    return null
   }
 }
 
-export function countCommitsBehind(folderPath: string, baseBranch: string): number {
+export async function countCommitsBehind(folderPath: string, baseBranch: string): Promise<number> {
+  if (!isSafeRefName(baseBranch)) return 0
   try {
-    const count = execSync(`git rev-list --count HEAD..origin/${baseBranch}`, {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
+    const count = await gitStdout(
+      ['rev-list', '--count', `HEAD..origin/${baseBranch}`],
+      { cwd: folderPath },
+    )
     return parseInt(count, 10) || 0
   } catch {
     return 0
   }
 }
 
-export function countCommitsAhead(folderPath: string, baseBranch: string): number {
+export async function countCommitsAhead(folderPath: string, baseBranch: string): Promise<number> {
+  if (!isSafeRefName(baseBranch)) return 0
   try {
-    const count = execSync(`git rev-list --count origin/${baseBranch}..HEAD`, {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
+    const count = await gitStdout(
+      ['rev-list', '--count', `origin/${baseBranch}..HEAD`],
+      { cwd: folderPath },
+    )
     return parseInt(count, 10) || 0
   } catch {
     return 0
   }
 }
 
-export function countUncommitted(folderPath: string): number {
+export async function countUncommitted(folderPath: string): Promise<number> {
   try {
-    const status = execSync('git status --porcelain', {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
+    const status = await gitStdout(['status', '--porcelain'], { cwd: folderPath })
     return status ? status.split('\n').length : 0
   } catch {
     return 0
   }
 }
 
-export function gitFetchOrigin(folderPath: string): void {
-  execSync('git fetch origin', {
+export async function gitFetchOrigin(folderPath: string): Promise<void> {
+  await execFileAsync('git', ['fetch', 'origin'], {
     cwd: folderPath,
     encoding: 'utf-8',
     timeout: 15000,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 1024 * 1024,
   })
 }
 
@@ -183,20 +151,20 @@ const emptyFolderMeta: GitFolderMeta = {
   state: 'not-git',
 }
 
-export function buildGitFolderMeta(folderPath: string, fetch = false): GitFolderMeta {
-  if (!isGitRepo(folderPath)) {
+export async function buildGitFolderMeta(folderPath: string, fetch = false): Promise<GitFolderMeta> {
+  if (!(await isGitRepo(folderPath))) {
     return { ...emptyFolderMeta }
   }
 
-  const hasRemote = hasOriginRemote(folderPath)
-  const currentBranch = getCurrentBranch(folderPath)
+  const hasRemote = await hasOriginRemote(folderPath)
+  const currentBranch = await getCurrentBranch(folderPath)
   const gitBranch = currentBranch
-  const gitRemote = hasRemote ? getOriginRemoteUrl(folderPath) : null
-  const baseBranch = resolveBaseBranch(folderPath)
+  const gitRemote = hasRemote ? await getOriginRemoteUrl(folderPath) : null
+  const baseBranch = await resolveBaseBranch(folderPath)
 
   if (fetch && hasRemote) {
     try {
-      gitFetchOrigin(folderPath)
+      await gitFetchOrigin(folderPath)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       return {
@@ -207,19 +175,19 @@ export function buildGitFolderMeta(folderPath: string, fetch = false): GitFolder
         currentBranch,
         commitsBehind: 0,
         commitsAhead: 0,
-        uncommitted: countUncommitted(folderPath),
+        uncommitted: await countUncommitted(folderPath),
         state: 'error',
         error: msg.slice(0, 200),
       }
     }
   }
 
-  const uncommitted = countUncommitted(folderPath)
+  const uncommitted = await countUncommitted(folderPath)
   let commitsBehind = 0
   let commitsAhead = 0
   if (baseBranch) {
-    commitsBehind = countCommitsBehind(folderPath, baseBranch)
-    commitsAhead = countCommitsAhead(folderPath, baseBranch)
+    commitsBehind = await countCommitsBehind(folderPath, baseBranch)
+    commitsAhead = await countCommitsAhead(folderPath, baseBranch)
   }
 
   const state = deriveSyncState(
@@ -244,8 +212,8 @@ export function buildGitFolderMeta(folderPath: string, fetch = false): GitFolder
   }
 }
 
-export function buildGitSyncStatus(folderPath: string, fetch = false): GitSyncStatus {
-  const meta = buildGitFolderMeta(folderPath, fetch)
+export async function buildGitSyncStatus(folderPath: string, fetch = false): Promise<GitSyncStatus> {
+  const meta = await buildGitFolderMeta(folderPath, fetch)
   return {
     isGitRepo: meta.isGitRepo,
     baseBranch: meta.baseBranch,
@@ -258,22 +226,22 @@ export function buildGitSyncStatus(folderPath: string, fetch = false): GitSyncSt
   }
 }
 
-export function pullFolderToBase(folderPath: string): {
+export async function pullFolderToBase(folderPath: string): Promise<{
   success: boolean
   error?: string
   branch?: string | null
   behind?: number
   ahead?: number
-} {
-  if (!isGitRepo(folderPath)) {
+}> {
+  if (!(await isGitRepo(folderPath))) {
     return { success: false, error: 'Not a git repository' }
   }
 
-  if (!hasOriginRemote(folderPath)) {
+  if (!(await hasOriginRemote(folderPath))) {
     return { success: false, error: 'No origin remote configured' }
   }
 
-  const baseBranch = resolveBaseBranch(folderPath)
+  const baseBranch = await resolveBaseBranch(folderPath)
   if (!baseBranch) {
     return { success: false, error: 'Could not determine main/master branch' }
   }
@@ -281,7 +249,7 @@ export function pullFolderToBase(folderPath: string): {
     return { success: false, error: 'Invalid branch name' }
   }
 
-  const uncommitted = countUncommitted(folderPath)
+  const uncommitted = await countUncommitted(folderPath)
   if (uncommitted > 0) {
     return {
       success: false,
@@ -290,21 +258,21 @@ export function pullFolderToBase(folderPath: string): {
   }
 
   try {
-    gitFetchOrigin(folderPath)
+    await gitFetchOrigin(folderPath)
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     return { success: false, error: `Fetch failed: ${msg.slice(0, 200)}` }
   }
 
   try {
-    execFileSync(
+    await execFileAsync(
       'git',
       ['checkout', '-B', baseBranch, `origin/${baseBranch}`],
       {
         cwd: folderPath,
         encoding: 'utf-8',
         timeout: 10000,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 1024 * 1024,
       },
     )
   } catch (err: unknown) {
@@ -319,14 +287,14 @@ export function pullFolderToBase(folderPath: string): {
   }
 
   try {
-    execFileSync(
+    await execFileAsync(
       'git',
       ['pull', '--ff-only', 'origin', baseBranch],
       {
         cwd: folderPath,
         encoding: 'utf-8',
         timeout: 15000,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 1024 * 1024,
       },
     )
   } catch (err: unknown) {
@@ -334,11 +302,11 @@ export function pullFolderToBase(folderPath: string): {
     return { success: false, error: msg.slice(0, 200) }
   }
 
-  const branch = getCurrentBranch(folderPath)
+  const branch = await getCurrentBranch(folderPath)
   return {
     success: true,
     branch,
-    behind: countCommitsBehind(folderPath, baseBranch),
-    ahead: countCommitsAhead(folderPath, baseBranch),
+    behind: await countCommitsBehind(folderPath, baseBranch),
+    ahead: await countCommitsAhead(folderPath, baseBranch),
   }
 }
