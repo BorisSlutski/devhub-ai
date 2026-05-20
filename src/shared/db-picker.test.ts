@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   filterProducers,
   listProducersForBrowse,
+  dedupeProducersForBrowse,
   groupProducersByCluster,
   duplicateDbNames,
   shouldShowDatabaseSubtitle,
@@ -48,6 +49,27 @@ describe('duplicateDbNames', () => {
     const dupes = duplicateDbNames(producers.filter((p) => p.cluster === 'c1'))
     expect(dupes.has('mydb')).toBe(true)
     expect(dupes.has('other')).toBe(false)
+  })
+})
+
+describe('dedupeProducersForBrowse', () => {
+  it('collapses identical browse keys to one row', () => {
+    const dupes: DbProducerPicker[] = [
+      { name: '/prod/.../long-path/cronulla', cluster: 'c1', database: 'loc', dbName: 'cronulla', type: 'mysql' },
+      { name: '/p/a', cluster: 'c1', database: 'loc', dbName: 'cronulla', type: 'mysql' },
+      { name: '/p/b', cluster: 'c1', database: 'loc', dbName: 'cronulla', type: 'mysql' },
+    ]
+    const list = dedupeProducersForBrowse(dupes)
+    expect(list).toHaveLength(1)
+    expect(list[0].name).toBe('/p/a')
+  })
+
+  it('keeps rows that differ by locality', () => {
+    const list = dedupeProducersForBrowse([
+      { name: '/p/1', cluster: 'c1', database: 'loc_a', dbName: 'domain_audit', type: 'mysql' },
+      { name: '/p/2', cluster: 'c1', database: 'loc_b', dbName: 'domain_audit', type: 'mysql' },
+    ])
+    expect(list).toHaveLength(2)
   })
 })
 

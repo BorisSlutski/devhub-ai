@@ -31,6 +31,9 @@ export interface AppState {
   workspaceChosen?: boolean
   activeTab?: 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access' | 'airflow'
   selectedProjectId?: string | null
+  /** Absolute paths of starred folders on the All Folders tab */
+  favoriteFolderPaths?: string[]
+  foldersSortBy?: 'name' | 'recent'
   usePtyDaemon?: boolean
   setupWizardDismissed?: boolean
 }

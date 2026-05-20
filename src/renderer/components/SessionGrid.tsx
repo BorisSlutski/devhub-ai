@@ -163,11 +163,20 @@ export function SessionGrid({
                 </button>
               </div>
               <div className="session-grid-cell-terminal">
-                <XTerminal
-                  sessionId={sessionId}
-                  active={isFocused}
-                  onWaitingChange={w => onWaitingChange(sessionId, w)}
-                />
+                {isFocused ? (
+                  <XTerminal
+                    sessionId={sessionId}
+                    active
+                    onWaitingChange={w => onWaitingChange(sessionId, w)}
+                  />
+                ) : (
+                  <div
+                    className="session-grid-cell-placeholder"
+                    title={session.label}
+                  >
+                    {session.label}
+                  </div>
+                )}
               </div>
             </div>
           )

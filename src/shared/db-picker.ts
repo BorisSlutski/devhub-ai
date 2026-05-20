@@ -15,11 +15,34 @@ function matchesProducerQuery(p: DbProducerPicker, q: string): boolean {
   )
 }
 
+/** Stable browse identity — same display tuple from different Akeyless paths collapses to one row. */
+export function producerBrowseKey(p: DbProducerPicker): string {
+  return `${p.type}\0${p.dbName}\0${p.cluster}\0${p.database}`
+}
+
+function pickCanonicalProducer(candidates: DbProducerPicker[]): DbProducerPicker {
+  return [...candidates].sort(
+    (a, b) => a.name.length - b.name.length || a.name.localeCompare(b.name),
+  )[0]
+}
+
+/** Collapse producers that share the same browse identity (type + dbName + cluster + locality). */
+export function dedupeProducersForBrowse(producers: DbProducerPicker[]): DbProducerPicker[] {
+  const byKey = new Map<string, DbProducerPicker[]>()
+  for (const p of producers) {
+    const key = producerBrowseKey(p)
+    const list = byKey.get(key) ?? []
+    list.push(p)
+    byKey.set(key, list)
+  }
+  return Array.from(byKey.values()).map(pickCanonicalProducer)
+}
+
 /** Filter by db name, host segment, cluster, or full producer path. Empty query returns []. */
 export function filterProducers(producers: DbProducerPicker[], query: string): DbProducerPicker[] {
   const q = query.trim().toLowerCase()
   if (!q) return []
-  return producers.filter((p) => matchesProducerQuery(p, q))
+  return dedupeProducersForBrowse(producers.filter((p) => matchesProducerQuery(p, q)))
 }
 
 /** All producers matching query, or every producer when query is empty (database browse mode). */
@@ -29,7 +52,7 @@ export function listProducersForBrowse(
 ): DbProducerPicker[] {
   const q = query.trim().toLowerCase()
   const list = q ? producers.filter((p) => matchesProducerQuery(p, q)) : producers
-  return [...list].sort(
+  return dedupeProducersForBrowse(list).sort(
     (a, b) => a.dbName.localeCompare(b.dbName) || a.cluster.localeCompare(b.cluster),
   )
 }

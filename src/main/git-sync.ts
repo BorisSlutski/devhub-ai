@@ -1,5 +1,12 @@
-import { execSync } from 'child_process'
+import { execFileSync, execSync } from 'child_process'
 import type { GitSyncState, GitSyncStatus } from '../shared/ipc-types'
+
+/** Git ref names safe for argv (branch names from symbolic-ref / origin/HEAD). */
+export function isSafeRefName(ref: string): boolean {
+  if (!ref || ref.length > 200) return false
+  if (ref.includes('..') || ref.startsWith('-') || ref.endsWith('.lock')) return false
+  return /^[\w./-]+$/.test(ref)
+}
 
 export function deriveSyncState(
   isGitRepo: boolean,
@@ -229,6 +236,9 @@ export function pullFolderToBase(folderPath: string): {
   if (!baseBranch) {
     return { success: false, error: 'Could not determine main/master branch' }
   }
+  if (!isSafeRefName(baseBranch)) {
+    return { success: false, error: 'Invalid branch name' }
+  }
 
   const uncommitted = countUncommitted(folderPath)
   if (uncommitted > 0) {
@@ -246,12 +256,16 @@ export function pullFolderToBase(folderPath: string): {
   }
 
   try {
-    execSync(`git checkout -B "${baseBranch}" "origin/${baseBranch}"`, {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 10000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    execFileSync(
+      'git',
+      ['checkout', '-B', baseBranch, `origin/${baseBranch}`],
+      {
+        cwd: folderPath,
+        encoding: 'utf-8',
+        timeout: 10000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     if (msg.includes('Your local changes') || msg.includes('would be overwritten')) {
@@ -264,12 +278,16 @@ export function pullFolderToBase(folderPath: string): {
   }
 
   try {
-    execSync(`git pull --ff-only origin "${baseBranch}"`, {
-      cwd: folderPath,
-      encoding: 'utf-8',
-      timeout: 15000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    execFileSync(
+      'git',
+      ['pull', '--ff-only', 'origin', baseBranch],
+      {
+        cwd: folderPath,
+        encoding: 'utf-8',
+        timeout: 15000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     return { success: false, error: msg.slice(0, 200) }

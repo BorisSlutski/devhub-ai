@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { sql, MySQL } from '@codemirror/lang-sql'
+import { Prec } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import {
   filterProducers,
   listProducersForBrowse,
+  dedupeProducersForBrowse,
   groupProducersByCluster,
   duplicateDbNames,
   shouldShowDatabaseSubtitle,
@@ -47,11 +49,56 @@ interface ColumnInfo {
   extra: string
 }
 
-interface ConnectionState {
+interface DbSessionWorkspace {
+  tables: TableInfo[]
+  tablesLoading: boolean
+  expandedTable: string | null
+  tableColumns: Record<string, ColumnInfo[]>
+  columnsLoading: string | null
+  query: string
+  result: QueryResult | null
+  queryRunning: boolean
+  activeResultTab: 'results' | 'messages'
+  messages: string[]
+}
+
+interface DbSession {
+  id: string
   connectionId: string
   tunnelId: string
   cluster: string
   database: string
+  label: string
+  workspace: DbSessionWorkspace
+}
+
+function createEmptyWorkspace(): DbSessionWorkspace {
+  return {
+    tables: [],
+    tablesLoading: false,
+    expandedTable: null,
+    tableColumns: {},
+    columnsLoading: null,
+    query: '',
+    result: null,
+    queryRunning: false,
+    activeResultTab: 'results',
+    messages: [],
+  }
+}
+
+function createSession(conn: {
+  connectionId: string
+  tunnelId: string
+  cluster: string
+  database: string
+}): DbSession {
+  return {
+    id: conn.connectionId,
+    ...conn,
+    label: `${conn.cluster} / ${conn.database}`,
+    workspace: createEmptyWorkspace(),
+  }
 }
 
 type ConnectPhase =
@@ -114,12 +161,12 @@ function formatMs(ms: number): string {
 /* ── Component ── */
 
 export function DbWorkbenchView() {
-  // Connection state
-  const [connection, setConnection] = useState<ConnectionState | null>(null)
-  const [connectPhase, setConnectPhase] = useState<ConnectPhase>('idle')
+  const [sessions, setSessions] = useState<DbSession[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [isConnecting, setIsConnecting] = useState(false)
+  const [connectPhase, setConnectPhase] = useState<ConnectPhase>('authenticating')
   const [connectError, setConnectError] = useState<string | null>(null)
 
-  // Producer picker
   const [showPicker, setShowPicker] = useState(false)
   const [producers, setProducers] = useState<DbProducer[]>([])
   const [producersLoading, setProducersLoading] = useState(false)
@@ -128,22 +175,60 @@ export function DbWorkbenchView() {
   const [selectedCluster, setSelectedCluster] = useState<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // Schema browser
-  const [tables, setTables] = useState<TableInfo[]>([])
-  const [tablesLoading, setTablesLoading] = useState(false)
-  const [expandedTable, setExpandedTable] = useState<string | null>(null)
-  const [tableColumns, setTableColumns] = useState<Record<string, ColumnInfo[]>>({})
-  const [columnsLoading, setColumnsLoading] = useState<string | null>(null)
+  const runQueryRef = useRef<(sqlOverride?: string) => void>(() => {})
+  const editorViewRef = useRef<EditorView | null>(null)
+  const connectPhaseTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
 
-  // SQL editor
-  const [query, setQuery] = useState('')
-  const runQueryRef = useRef<() => void>(() => {})
+  const activeSession = useMemo(
+    () => sessions.find((s) => s.id === activeSessionId) ?? null,
+    [sessions, activeSessionId],
+  )
+  const ws = activeSession?.workspace
 
-  // Results
-  const [result, setResult] = useState<QueryResult | null>(null)
-  const [queryRunning, setQueryRunning] = useState(false)
-  const [activeResultTab, setActiveResultTab] = useState<'results' | 'messages'>('results')
-  const [messages, setMessages] = useState<string[]>([])
+  useEffect(() => {
+    if (sessions.length > 0 && !activeSessionId) {
+      setActiveSessionId(sessions[sessions.length - 1].id)
+    }
+  }, [sessions, activeSessionId])
+
+  const patchSession = useCallback((sessionId: string, patch: Partial<DbSessionWorkspace>) => {
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === sessionId ? { ...s, workspace: { ...s.workspace, ...patch } } : s,
+      ),
+    )
+  }, [])
+
+  const updateSessionWorkspace = useCallback(
+    (
+      sessionId: string,
+      fn: (ws: DbSessionWorkspace) => Partial<DbSessionWorkspace>,
+    ) => {
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? { ...s, workspace: { ...s.workspace, ...fn(s.workspace) } }
+            : s,
+        ),
+      )
+    },
+    [],
+  )
+
+  useEffect(() => {
+    return () => {
+      for (const t of connectPhaseTimersRef.current) clearTimeout(t)
+      connectPhaseTimersRef.current = []
+    }
+  }, [])
+
+  const patchActiveSession = useCallback(
+    (patch: Partial<DbSessionWorkspace>) => {
+      if (!activeSessionId) return
+      patchSession(activeSessionId, patch)
+    },
+    [activeSessionId, patchSession],
+  )
 
   /* ── Producer Picker ── */
 
@@ -213,7 +298,7 @@ export function DbWorkbenchView() {
 
   const clusterDatabases = useMemo(() => {
     if (!selectedCluster) return []
-    return producers
+    const filtered = producers
       .filter((p) => p.cluster === selectedCluster)
       .filter((p) => {
         const q = producerSearch.toLowerCase()
@@ -223,7 +308,7 @@ export function DbWorkbenchView() {
           p.database.toLowerCase().includes(q)
         )
       })
-      .sort((a, b) => a.dbName.localeCompare(b.dbName))
+    return dedupeProducersForBrowse(filtered).sort((a, b) => a.dbName.localeCompare(b.dbName))
   }, [producers, selectedCluster, producerSearch])
 
   const clusterDupes = useMemo(() => duplicateDbNames(clusterDatabases), [clusterDatabases])
@@ -233,204 +318,297 @@ export function DbWorkbenchView() {
   const handleConnect = useCallback(async (producerName: string) => {
     setShowPicker(false)
     setConnectError(null)
+    setIsConnecting(true)
     setConnectPhase('authenticating')
 
-    // Simulate phase progression (real timing depends on backend)
-    const phaseTimer1 = setTimeout(() => setConnectPhase('tunneling'), 5000)
-    const phaseTimer2 = setTimeout(() => setConnectPhase('connecting'), 12000)
+    for (const t of connectPhaseTimersRef.current) clearTimeout(t)
+    connectPhaseTimersRef.current = [
+      setTimeout(() => setConnectPhase('tunneling'), 5000),
+      setTimeout(() => setConnectPhase('connecting'), 12000),
+    ]
+
+    const clearPhaseTimers = () => {
+      for (const t of connectPhaseTimersRef.current) clearTimeout(t)
+      connectPhaseTimersRef.current = []
+    }
 
     try {
       const res = await window.api.dbConnect(producerName)
-      clearTimeout(phaseTimer1)
-      clearTimeout(phaseTimer2)
+      clearPhaseTimers()
 
       if (!res.success || res.error) {
-        setConnectPhase('idle')
-        setConnectError(res.error ?? 'Connection failed')
+        setIsConnecting(false)
+        const errText = res.error ?? 'Connection failed'
+        const portExhausted = /No free local ports/i.test(errText)
+        setConnectError(
+          portExhausted
+            ? `${errText} Max ~51 DB tunnels — disconnect a tab first.`
+            : errText,
+        )
         return
       }
 
-      setConnection({
+      const newSession = createSession({
         connectionId: res.connectionId!,
         tunnelId: res.tunnelId!,
         cluster: res.cluster!,
         database: res.database!,
       })
-      setConnectPhase('done')
-
-      // Reset workspace state
-      setTables([])
-      setTableColumns({})
-      setExpandedTable(null)
-      setResult(null)
-      setMessages([])
-      setQuery('')
+      setSessions((prev) => [...prev, newSession])
+      setActiveSessionId(newSession.id)
+      setIsConnecting(false)
     } catch (err) {
-      clearTimeout(phaseTimer1)
-      clearTimeout(phaseTimer2)
-      setConnectPhase('idle')
-      setConnectError(`Connection failed: ${err instanceof Error ? err.message : String(err)}`)
+      clearPhaseTimers()
+      setIsConnecting(false)
+      const errText = err instanceof Error ? err.message : String(err)
+      const portExhausted = /No free local ports/i.test(errText)
+      setConnectError(
+        portExhausted
+          ? `${errText} Max ~51 DB tunnels — disconnect a tab first.`
+          : `Connection failed: ${errText}`,
+      )
     }
   }, [])
 
-  const handleDisconnect = useCallback(async () => {
-    if (!connection) return
-    try {
-      await window.api.dbDisconnect(connection.connectionId)
-    } catch {
-      // Best effort
-    }
-    setConnection(null)
-    setConnectPhase('idle')
-    setTables([])
-    setTableColumns({})
-    setExpandedTable(null)
-    setResult(null)
-    setMessages([])
-    setQuery('')
-  }, [connection])
+  const handleDisconnect = useCallback(
+    async (sessionId: string) => {
+      const session = sessions.find((s) => s.id === sessionId)
+      if (!session) return
+      try {
+        await window.api.dbDisconnect(session.connectionId)
+      } catch {
+        // Best effort
+      }
+      const next = sessions.filter((s) => s.id !== sessionId)
+      setSessions(next)
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(next[next.length - 1]?.id ?? null)
+      }
+    },
+    [sessions, activeSessionId],
+  )
 
   /* ── Fetch Tables ── */
 
-  const fetchTables = useCallback(async () => {
-    if (!connection) return
-    setTablesLoading(true)
-    try {
-      const res = await window.api.dbListTables(connection.connectionId)
-      if (!res.success) {
-        setMessages((prev) => [...prev, `Error loading tables: ${res.error ?? 'Unknown error'}`])
-        setActiveResultTab('messages')
-        setTables([])
-      } else {
-        setTables(res.tables ?? [])
+  const fetchTables = useCallback(
+    async (sessionId: string) => {
+      let connectionId: string | null = null
+      setSessions((prev) => {
+        const session = prev.find((s) => s.id === sessionId)
+        connectionId = session?.connectionId ?? null
+        return prev.map((s) =>
+          s.id === sessionId ? { ...s, workspace: { ...s.workspace, tablesLoading: true } } : s,
+        )
+      })
+      if (!connectionId) return
+
+      try {
+        const res = await window.api.dbListTables(connectionId)
+        if (!res.success) {
+          const errMsg = `Error loading tables: ${res.error ?? 'Unknown error'}`
+          updateSessionWorkspace(sessionId, (ws) => ({
+            tables: [],
+            tablesLoading: false,
+            messages: [...ws.messages, errMsg],
+            activeResultTab: 'messages',
+          }))
+        } else {
+          patchSession(sessionId, { tables: res.tables ?? [], tablesLoading: false })
+        }
+      } catch (err) {
+        const errMsg = `Error loading tables: ${err instanceof Error ? err.message : String(err)}`
+        updateSessionWorkspace(sessionId, (ws) => ({
+          tables: [],
+          tablesLoading: false,
+          messages: [...ws.messages, errMsg],
+          activeResultTab: 'messages',
+        }))
       }
-    } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        `Error loading tables: ${err instanceof Error ? err.message : String(err)}`,
-      ])
-      setActiveResultTab('messages')
-    } finally {
-      setTablesLoading(false)
-    }
-  }, [connection])
+    },
+    [patchSession, updateSessionWorkspace],
+  )
+
+  const activeTablesLength = activeSession?.workspace.tables.length ?? 0
+  const activeTablesLoading = activeSession?.workspace.tablesLoading ?? false
 
   useEffect(() => {
-    if (connection) {
-      fetchTables()
-    }
-  }, [connection, fetchTables])
+    if (!activeSessionId) return
+    if (activeTablesLength > 0 || activeTablesLoading) return
+    void fetchTables(activeSessionId)
+  }, [activeSessionId, activeTablesLength, activeTablesLoading, fetchTables])
 
   /* ── Expand Table (describe) ── */
 
   const toggleTable = useCallback(
     async (tableName: string) => {
-      if (expandedTable === tableName) {
-        setExpandedTable(null)
-        return
-      }
-      setExpandedTable(tableName)
+      if (!activeSessionId) return
+      let connectionId: string | null = null
+      let skipFetch = true
+      setSessions((prev) => {
+        const session = prev.find((s) => s.id === activeSessionId)
+        if (!session) return prev
+        connectionId = session.connectionId
+        if (session.workspace.expandedTable === tableName) {
+          skipFetch = true
+          return prev.map((s) =>
+            s.id === activeSessionId
+              ? { ...s, workspace: { ...s.workspace, expandedTable: null } }
+              : s,
+          )
+        }
+        if (session.workspace.tableColumns[tableName]) {
+          skipFetch = true
+          return prev.map((s) =>
+            s.id === activeSessionId
+              ? { ...s, workspace: { ...s.workspace, expandedTable: tableName } }
+              : s,
+          )
+        }
+        skipFetch = false
+        return prev.map((s) =>
+          s.id === activeSessionId
+            ? { ...s, workspace: { ...s.workspace, expandedTable: tableName } }
+            : s,
+        )
+      })
+      if (!connectionId || skipFetch) return
 
-      if (tableColumns[tableName]) return
-      if (!connection) return
-
-      setColumnsLoading(tableName)
+      patchActiveSession({ columnsLoading: tableName })
       try {
-        const res = await window.api.dbDescribeTable(connection.connectionId, tableName)
+        const res = await window.api.dbDescribeTable(connectionId, tableName)
         if (!res.success) {
-          setMessages((prev) => [...prev, `Error describing ${tableName}: ${res.error ?? 'Unknown error'}`])
-          setActiveResultTab('messages')
+          updateSessionWorkspace(activeSessionId, (w) => ({
+            columnsLoading: null,
+            messages: [
+              ...w.messages,
+              `Error describing ${tableName}: ${res.error ?? 'Unknown error'}`,
+            ],
+            activeResultTab: 'messages',
+          }))
         } else {
-          setTableColumns((prev) => ({ ...prev, [tableName]: res.columns ?? [] }))
+          updateSessionWorkspace(activeSessionId, (w) => ({
+            columnsLoading: null,
+            tableColumns: { ...w.tableColumns, [tableName]: res.columns ?? [] },
+          }))
         }
       } catch (err) {
-        setMessages((prev) => [
-          ...prev,
-          `Error describing ${tableName}: ${err instanceof Error ? err.message : String(err)}`,
-        ])
-        setActiveResultTab('messages')
-      } finally {
-        setColumnsLoading(null)
+        const errMsg = err instanceof Error ? err.message : String(err)
+        updateSessionWorkspace(activeSessionId, (w) => ({
+          columnsLoading: null,
+          messages: [...w.messages, `Error describing ${tableName}: ${errMsg}`],
+          activeResultTab: 'messages',
+        }))
       }
     },
-    [connection, expandedTable, tableColumns],
+    [activeSessionId, patchActiveSession, updateSessionWorkspace],
   )
 
   const handleTableClick = useCallback(
     (tableName: string) => {
-      setQuery(`SELECT * FROM \`${tableName}\` LIMIT 100;`)
+      patchActiveSession({ query: `SELECT * FROM \`${tableName}\` LIMIT 100;` })
     },
-    [],
+    [patchActiveSession],
   )
 
   /* ── Run Query ── */
 
-  const runQuery = useCallback(async () => {
-    if (!connection || !query.trim() || queryRunning) return
-    setQueryRunning(true)
-    setResult(null)
-    setActiveResultTab('results')
+  const runQuery = useCallback(
+    async (sqlOverride?: string) => {
+      if (!activeSessionId) return
+      let connectionId: string | null = null
+      let sql = ''
+      setSessions((prev) => {
+        const session = prev.find((s) => s.id === activeSessionId)
+        if (!session) return prev
+        connectionId = session.connectionId
+        sql = (sqlOverride ?? session.workspace.query).trim()
+        if (!sql || session.workspace.queryRunning) {
+          connectionId = null
+          return prev
+        }
+        return prev.map((s) =>
+          s.id === activeSessionId
+            ? {
+                ...s,
+                workspace: {
+                  ...s.workspace,
+                  queryRunning: true,
+                  result: null,
+                  activeResultTab: 'results',
+                },
+              }
+            : s,
+        )
+      })
+      if (!connectionId || !sql) return
 
-    try {
-      const res = await window.api.dbExecuteQuery(connection.connectionId, query.trim())
-      setResult(res)
-      if (res.error) {
-        setMessages((prev) => [...prev, `Error: ${res.error}`])
-        setActiveResultTab('messages')
+      try {
+        const res = await window.api.dbExecuteQuery(connectionId, sql)
+        if (res.error) {
+          updateSessionWorkspace(activeSessionId, (w) => ({
+            queryRunning: false,
+            result: res,
+            messages: [...w.messages, `Error: ${res.error}`],
+            activeResultTab: 'messages',
+          }))
+        } else {
+          patchSession(activeSessionId, { queryRunning: false, result: res })
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        updateSessionWorkspace(activeSessionId, (w) => ({
+          queryRunning: false,
+          result: null,
+          messages: [...w.messages, `Query failed: ${errMsg}`],
+          activeResultTab: 'messages',
+        }))
+
+        if (/ECONNRESET|EPIPE|lost|closed|timeout/i.test(errMsg)) {
+          setConnectError('Connection lost. Please reconnect.')
+          void handleDisconnect(activeSessionId)
+        }
       }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      setResult(null)
-      setMessages((prev) => [...prev, `Query failed: ${errMsg}`])
-      setActiveResultTab('messages')
-
-      // If connection dropped, offer reconnect
-      if (/ECONNRESET|EPIPE|lost|closed|timeout/i.test(errMsg)) {
-        setConnectError('Connection lost. Please reconnect.')
-        setConnection(null)
-        setConnectPhase('idle')
-      }
-    } finally {
-      setQueryRunning(false)
-    }
-  }, [connection, query, queryRunning])
-
-  // Keep ref current for CodeMirror keymap
-  runQueryRef.current = runQuery
-
-  /* ── Keyboard shortcut: Cmd+Enter ── */
-
-  const cmRunKeymap = useRef(
-    keymap.of([
-      {
-        key: 'Mod-Enter',
-        run: () => {
-          runQueryRef.current()
-          return true
-        },
-      },
-    ]),
+    },
+    [activeSessionId, patchSession, updateSessionWorkspace, handleDisconnect],
   )
 
-  /* ── CodeMirror extensions ── */
+  runQueryRef.current = runQuery
 
-  const cmExtensions = useRef([
-    sql({ dialect: MySQL }),
-    EditorView.theme({
-      '&': { backgroundColor: 'var(--bg-primary)', fontSize: '13px' },
-      '.cm-content': { fontFamily: "'SF Mono', 'Menlo', monospace" },
-      '.cm-gutters': {
-        backgroundColor: 'var(--bg-secondary)',
-        borderRight: '1px solid var(--border)',
-        color: 'var(--text-muted)',
-      },
-      '.cm-activeLine': { backgroundColor: 'rgba(88,166,255,0.06)' },
-      '.cm-activeLineGutter': { backgroundColor: 'rgba(88,166,255,0.08)' },
-      '.cm-cursor': { borderLeftColor: 'var(--accent)' },
-      '.cm-selectionBackground': { backgroundColor: 'rgba(88,166,255,0.18) !important' },
-    }),
-    cmRunKeymap.current,
-  ])
+  const cmExtensions = useMemo(
+    () => [
+      sql({ dialect: MySQL }),
+      EditorView.theme({
+        '&': { backgroundColor: 'var(--bg-primary)', fontSize: '13px' },
+        '.cm-content': { fontFamily: "'SF Mono', 'Menlo', monospace" },
+        '.cm-gutters': {
+          backgroundColor: 'var(--bg-secondary)',
+          borderRight: '1px solid var(--border)',
+          color: 'var(--text-muted)',
+        },
+        '.cm-activeLine': { backgroundColor: 'rgba(88,166,255,0.06)' },
+        '.cm-activeLineGutter': { backgroundColor: 'rgba(88,166,255,0.08)' },
+        '.cm-cursor': { borderLeftColor: 'var(--accent)' },
+        '.cm-selectionBackground': { backgroundColor: 'rgba(88,166,255,0.18) !important' },
+      }),
+      EditorView.updateListener.of((update) => {
+        if (update.view) editorViewRef.current = update.view
+      }),
+      Prec.highest(
+        keymap.of([
+          {
+            key: 'Mod-Enter',
+            run: (view) => {
+              const { from, to } = view.state.selection.main
+              const selected = view.state.sliceDoc(from, to).trim()
+              runQueryRef.current(selected || undefined)
+              return true
+            },
+          },
+        ]),
+      ),
+    ],
+    [],
+  )
 
   function renderProducerRow(p: DbProducer, dupes: Set<string>, showClusterInSubtitle: boolean) {
     const showDbSubtitle = shouldShowDatabaseSubtitle(p, dupes) || showClusterInSubtitle
@@ -605,7 +783,7 @@ export function DbWorkbenchView() {
 
   /* ── Render: Not Connected ── */
 
-  if (!connection && connectPhase === 'idle') {
+  if (sessions.length === 0 && !isConnecting) {
     return (
       <div className="dbw-view">
         <div className="dbw-toolbar">
@@ -646,7 +824,7 @@ export function DbWorkbenchView() {
 
   /* ── Render: Connecting ── */
 
-  if (!connection && connectPhase !== 'idle') {
+  if (sessions.length === 0 && isConnecting) {
     return (
       <div className="dbw-view">
         <div className="dbw-toolbar">
@@ -700,24 +878,34 @@ export function DbWorkbenchView() {
       {/* ── Toolbar ── */}
       <div className="dbw-toolbar">
         <div className="dbw-toolbar-left">
-          <button className="btn btn-sm" onClick={openPicker}>
-            Connect &#9662;
+          <button className="btn btn-sm" type="button" onClick={openPicker}>
+            + Add connection
           </button>
-          <span className="dbw-conn-label">
-            {connection!.cluster} / {connection!.database}
-          </span>
+          {activeSession && <span className="dbw-conn-label">{activeSession.label}</span>}
           <span className="dbw-conn-status">
             <span className="dbw-conn-dot" />
-            Connected
+            {sessions.length} connected
           </span>
         </div>
         <div className="dbw-toolbar-right">
-          <button className="btn btn-sm btn-danger" onClick={handleDisconnect}>
-            Disconnect
-          </button>
-          <button className="btn btn-sm" onClick={fetchTables}>
-            Refresh
-          </button>
+          {activeSessionId && (
+            <>
+              <button
+                className="btn btn-sm btn-danger"
+                type="button"
+                onClick={() => void handleDisconnect(activeSessionId)}
+              >
+                Disconnect
+              </button>
+              <button
+                className="btn btn-sm"
+                type="button"
+                onClick={() => void fetchTables(activeSessionId)}
+              >
+                Refresh
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -725,7 +913,7 @@ export function DbWorkbenchView() {
         <div className="dbw-error-banner">
           <span className="dbw-error-icon">!</span>
           <span>{connectError}</span>
-          <button className="dbw-error-dismiss" onClick={() => setConnectError(null)}>
+          <button type="button" className="dbw-error-dismiss" onClick={() => setConnectError(null)}>
             Dismiss
           </button>
         </div>
@@ -733,27 +921,70 @@ export function DbWorkbenchView() {
 
       {showPicker && renderPickerModal()}
 
-      {/* ── Main Split ── */}
+      {isConnecting && (
+        <div className="dbw-connecting-overlay">
+          <div className="dbw-connecting-card">
+            <div className="dbw-connecting-spinner" />
+            <span>{PHASE_LABELS[connectPhase]}</span>
+          </div>
+        </div>
+      )}
+
       <div className="dbw-main">
-        {/* ── Left Sidebar: Schema Browser ── */}
+        <div className="dbw-session-tabs" role="tablist" aria-label="Database connections">
+          {sessions.map((s) => (
+            <div key={s.id} className="dbw-session-tab-wrap">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={s.id === activeSessionId}
+                className={`dbw-session-tab ${s.id === activeSessionId ? 'active' : ''}`}
+                onClick={() => setActiveSessionId(s.id)}
+                title={s.label}
+              >
+                <span className="dbw-session-tab-label">{s.database}</span>
+                <span className="dbw-session-tab-sub">{s.cluster}</span>
+              </button>
+              <button
+                type="button"
+                className="dbw-session-tab-close"
+                onClick={() => void handleDisconnect(s.id)}
+                title={`Disconnect ${s.label}`}
+                aria-label={`Disconnect ${s.label}`}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="dbw-session-tab dbw-session-tab-add"
+            onClick={openPicker}
+            title="Add connection"
+          >
+            +
+          </button>
+        </div>
+
+        <div className="dbw-workspace">
         <div className="dbw-sidebar">
           <div className="dbw-sidebar-header">
-            <span className="dbw-sidebar-title">{connection!.database}</span>
+            <span className="dbw-sidebar-title">{activeSession?.database ?? ''}</span>
             <span className="dbw-sidebar-count">
-              {tables.length} table{tables.length !== 1 ? 's' : ''}
+              {ws?.tables.length ?? 0} table{(ws?.tables.length ?? 0) !== 1 ? 's' : ''}
             </span>
           </div>
 
           <div className="dbw-sidebar-list">
-            {tablesLoading ? (
+            {ws?.tablesLoading ? (
               <div className="dbw-sidebar-loading">Loading tables...</div>
-            ) : tables.length === 0 ? (
+            ) : (ws?.tables.length ?? 0) === 0 ? (
               <div className="dbw-sidebar-empty">No tables found</div>
             ) : (
-              tables.map((t) => {
-                const isExpanded = expandedTable === t.name
-                const cols = tableColumns[t.name]
-                const isLoadingCols = columnsLoading === t.name
+              ws!.tables.map((t) => {
+                const isExpanded = ws!.expandedTable === t.name
+                const cols = ws!.tableColumns[t.name]
+                const isLoadingCols = ws!.columnsLoading === t.name
 
                 return (
                   <div key={t.name} className="dbw-table-node">
@@ -813,17 +1044,18 @@ export function DbWorkbenchView() {
               </span>
               <button
                 className="btn btn-sm btn-primary dbw-run-btn"
-                onClick={runQuery}
-                disabled={queryRunning || !query.trim()}
+                type="button"
+                onClick={() => void runQuery()}
+                disabled={!activeSession || ws?.queryRunning || !ws?.query.trim()}
               >
-                {queryRunning ? 'Running...' : 'Run \u25B6'}
+                {ws?.queryRunning ? 'Running...' : 'Run \u25B6'}
               </button>
             </div>
             <div className="dbw-editor-wrapper">
               <CodeMirror
-                value={query}
-                onChange={(val) => setQuery(val)}
-                extensions={cmExtensions.current}
+                value={ws?.query ?? ''}
+                onChange={(val) => patchActiveSession({ query: val })}
+                extensions={cmExtensions}
                 theme="dark"
                 height="100%"
                 basicSetup={{
@@ -843,33 +1075,36 @@ export function DbWorkbenchView() {
             <div className="dbw-results-toolbar">
               <div className="dbw-results-tabs">
                 <button
-                  className={`dbw-results-tab ${activeResultTab === 'results' ? 'active' : ''}`}
-                  onClick={() => setActiveResultTab('results')}
+                  type="button"
+                  className={`dbw-results-tab ${ws?.activeResultTab === 'results' ? 'active' : ''}`}
+                  onClick={() => patchActiveSession({ activeResultTab: 'results' })}
                 >
                   Results
                 </button>
                 <button
-                  className={`dbw-results-tab ${activeResultTab === 'messages' ? 'active' : ''}`}
-                  onClick={() => setActiveResultTab('messages')}
+                  type="button"
+                  className={`dbw-results-tab ${ws?.activeResultTab === 'messages' ? 'active' : ''}`}
+                  onClick={() => patchActiveSession({ activeResultTab: 'messages' })}
                 >
                   Messages
-                  {messages.length > 0 && (
-                    <span className="dbw-msg-count">{messages.length}</span>
+                  {(ws?.messages.length ?? 0) > 0 && (
+                    <span className="dbw-msg-count">{ws!.messages.length}</span>
                   )}
                 </button>
               </div>
-              {activeResultTab === 'results' && result && !result.error && (
+              {ws?.activeResultTab === 'results' && ws.result && !ws.result.error && (
                 <span className="dbw-results-meta">
-                  {result.rowCount} row{result.rowCount !== 1 ? 's' : ''}
+                  {ws.result.rowCount} row{ws.result.rowCount !== 1 ? 's' : ''}
                   {' \u00B7 '}
-                  {formatMs(result.executionTimeMs)}
-                  {result.affectedRows > 0 && ` \u00B7 ${result.affectedRows} affected`}
+                  {formatMs(ws.result.executionTimeMs)}
+                  {ws.result.affectedRows > 0 && ` \u00B7 ${ws.result.affectedRows} affected`}
                 </span>
               )}
-              {activeResultTab === 'messages' && messages.length > 0 && (
+              {ws?.activeResultTab === 'messages' && (ws?.messages.length ?? 0) > 0 && (
                 <button
+                  type="button"
                   className="btn btn-sm"
-                  onClick={() => setMessages([])}
+                  onClick={() => patchActiveSession({ messages: [] })}
                 >
                   Clear
                 </button>
@@ -877,24 +1112,24 @@ export function DbWorkbenchView() {
             </div>
 
             <div className="dbw-results-content">
-              {activeResultTab === 'results' ? (
-                queryRunning ? (
+              {ws?.activeResultTab === 'results' ? (
+                ws.queryRunning ? (
                   <div className="dbw-results-loading">
                     <div className="dbw-connecting-spinner dbw-spinner-sm" />
                     <span>Executing query...</span>
                   </div>
-                ) : result?.error ? (
+                ) : ws.result?.error ? (
                   <div className="dbw-results-error">
                     <span className="dbw-error-icon">!</span>
-                    <pre>{result.error}</pre>
+                    <pre>{ws.result.error}</pre>
                   </div>
-                ) : result && result.columns.length > 0 ? (
+                ) : ws.result && ws.result.columns.length > 0 ? (
                   <div className="dbw-table-scroll">
                     <table className="dbw-results-table">
                       <thead>
                         <tr>
                           <th className="dbw-row-num">#</th>
-                          {result.columns.map((col) => (
+                          {ws.result.columns.map((col) => (
                             <th key={col.name}>
                               <span className="dbw-th-name">{col.name}</span>
                               <span className="dbw-th-type">{col.type}</span>
@@ -903,7 +1138,7 @@ export function DbWorkbenchView() {
                         </tr>
                       </thead>
                       <tbody>
-                        {result.rows.map((row, ri) => (
+                        {ws.result.rows.map((row, ri) => (
                           <tr key={ri}>
                             <td className="dbw-row-num">{ri + 1}</td>
                             {row.map((cell, ci) => (
@@ -914,26 +1149,26 @@ export function DbWorkbenchView() {
                       </tbody>
                     </table>
                   </div>
-                ) : result && result.affectedRows > 0 ? (
+                ) : ws.result && ws.result.affectedRows > 0 ? (
                   <div className="dbw-results-message-ok">
-                    Query OK, {result.affectedRows} row{result.affectedRows !== 1 ? 's' : ''} affected
-                    ({formatMs(result.executionTimeMs)})
+                    Query OK, {ws.result.affectedRows} row{ws.result.affectedRows !== 1 ? 's' : ''} affected
+                    ({formatMs(ws.result.executionTimeMs)})
                   </div>
-                ) : !result ? (
+                ) : !ws.result ? (
                   <div className="dbw-results-empty">
                     Run a query to see results here
                   </div>
                 ) : (
                   <div className="dbw-results-empty">
-                    Query returned no rows ({formatMs(result.executionTimeMs)})
+                    Query returned no rows ({formatMs(ws.result.executionTimeMs)})
                   </div>
                 )
               ) : (
                 <div className="dbw-messages-list">
-                  {messages.length === 0 ? (
+                  {(ws?.messages.length ?? 0) === 0 ? (
                     <div className="dbw-results-empty">No messages</div>
                   ) : (
-                    messages.map((msg, i) => (
+                    ws!.messages.map((msg, i) => (
                       <div
                         key={i}
                         className={`dbw-message-item ${/^Error|^Query failed/i.test(msg) ? 'error' : ''}`}
@@ -946,6 +1181,7 @@ export function DbWorkbenchView() {
               )}
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>

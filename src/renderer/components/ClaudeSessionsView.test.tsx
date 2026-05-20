@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ClaudeSessionsView } from './ClaudeSessionsView'
 
 vi.mock('./XTerminal', () => ({
@@ -249,7 +249,7 @@ describe('ClaudeSessionsView', () => {
     expect(indicators.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('exited active session shows "Session ended" overlay', () => {
+  it('exited active session shows "Session ended" overlay', async () => {
     const session = makeSession({
       id: 'exited',
       folderName: 'exited-folder',
@@ -261,10 +261,12 @@ describe('ClaudeSessionsView', () => {
         sessions={[session]}
       />
     )
-    expect(screen.getByText('Session ended')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByText('Session ended')).toBeInTheDocument()
+    })
   })
 
-  it('renders multiple tabs, clicking selects different session', () => {
+  it('renders multiple tabs, clicking selects different session', async () => {
     const sessions = [
       makeSession({ id: 'first', folderName: 'first-folder' }),
       makeSession({ id: 'second', folderName: 'second-folder' }),
@@ -277,14 +279,18 @@ describe('ClaudeSessionsView', () => {
     )
     expect(screen.getByText('first-folder')).toBeInTheDocument()
     expect(screen.getByText('second-folder')).toBeInTheDocument()
-    expect(screen.getByTestId('terminal-second')).toHaveAttribute(
-      'data-active',
-      'true'
-    )
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-second')).toHaveAttribute(
+        'data-active',
+        'true',
+      )
+    })
     fireEvent.click(screen.getByText('first-folder'))
-    expect(screen.getByTestId('terminal-first')).toHaveAttribute(
-      'data-active',
-      'true'
-    )
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-first')).toHaveAttribute(
+        'data-active',
+        'true',
+      )
+    })
   })
 })

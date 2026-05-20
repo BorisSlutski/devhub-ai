@@ -18,12 +18,14 @@ export function registerDbWorkbenchHandlers() {
 
   // Connect: open tunnel + get credentials + connect MySQL
   ipcMain.handle('db-connect', async (_event, producerName: string) => {
+    let tunnelId: string | undefined
     try {
       console.log('[db-workbench] connecting to:', producerName)
 
       // 1. Open SSH tunnel (gets credentials + spawns akeyless connect)
       console.log('[db-workbench] opening tunnel...')
       const tunnel = await akeylessDb.openTunnel(producerName)
+      tunnelId = tunnel.id
       console.log('[db-workbench] tunnel open on port', tunnel.localPort)
 
       // 2. Wait for the tunnel to be ready (SSH handshake + cert setup takes ~5-8s)
@@ -51,7 +53,23 @@ export function registerDbWorkbenchHandlers() {
       }
     } catch (err: any) {
       console.error('[db-workbench] connect error:', err.message)
+      if (tunnelId) {
+        try {
+          await mysqlClient.disconnect(tunnelId)
+        } catch {
+          // ignore
+        }
+        akeylessDb.closeTunnel(tunnelId)
+      }
       return { success: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('db-list-connections', async () => {
+    try {
+      return { success: true, connections: mysqlClient.getConnections() }
+    } catch (err: any) {
+      return { success: false, connections: [], error: err.message }
     }
   })
 

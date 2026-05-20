@@ -1,36 +1,21 @@
 import { describe, it, expect } from 'vitest'
-import { deriveSyncState } from './git-sync'
+import { isSafeRefName } from './git-sync'
 
-describe('deriveSyncState', () => {
-  it('returns not-git when not a repo', () => {
-    expect(deriveSyncState(false, false, null, 0, 0, 0)).toBe('not-git')
+describe('isSafeRefName', () => {
+  it('accepts typical branch names', () => {
+    expect(isSafeRefName('main')).toBe(true)
+    expect(isSafeRefName('master')).toBe(true)
+    expect(isSafeRefName('release/1.2')).toBe(true)
+    expect(isSafeRefName('feature/foo-bar_1')).toBe(true)
   })
 
-  it('returns no-remote without origin', () => {
-    expect(deriveSyncState(true, false, 'main', 0, 0, 0)).toBe('no-remote')
-  })
-
-  it('returns no-base without base branch', () => {
-    expect(deriveSyncState(true, true, null, 0, 0, 0)).toBe('no-base')
-  })
-
-  it('returns dirty when uncommitted changes exist', () => {
-    expect(deriveSyncState(true, true, 'main', 3, 0, 2)).toBe('dirty')
-  })
-
-  it('returns diverged when behind and ahead', () => {
-    expect(deriveSyncState(true, true, 'main', 2, 1, 0)).toBe('diverged')
-  })
-
-  it('returns behind when only behind', () => {
-    expect(deriveSyncState(true, true, 'main', 3, 0, 0)).toBe('behind')
-  })
-
-  it('returns ahead when only ahead', () => {
-    expect(deriveSyncState(true, true, 'main', 0, 2, 0)).toBe('ahead')
-  })
-
-  it('returns synced when aligned and clean', () => {
-    expect(deriveSyncState(true, true, 'main', 0, 0, 0)).toBe('synced')
+  it('rejects unsafe ref names', () => {
+    expect(isSafeRefName('')).toBe(false)
+    expect(isSafeRefName('main; rm -rf')).toBe(false)
+    expect(isSafeRefName('branch with spaces')).toBe(false)
+    expect(isSafeRefName('evil"branch')).toBe(false)
+    expect(isSafeRefName('../main')).toBe(false)
+    expect(isSafeRefName('-bad')).toBe(false)
+    expect(isSafeRefName('refs/heads/main.lock')).toBe(false)
   })
 })

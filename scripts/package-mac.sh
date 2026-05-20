@@ -78,7 +78,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
   <key>CFBundleExecutable</key>
   <string>DevHub-AI</string>
   <key>CFBundleIconFile</key>
-  <string>DevHub-AI.icns</string>
+  <string>DevHub-AI</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>
@@ -97,7 +97,11 @@ chmod +x "$APP_DIR/Contents/Resources/app/node_modules/node-pty/build/Release/sp
 echo ""
 echo "Done! $APP_NAME.app created at: $DIST_DIR/$APP_NAME.app"
 echo ""
-echo "To install, run:"
-echo "  cp -R \"$DIST_DIR/$APP_NAME.app\" /Applications/"
+echo "To install to Applications (Dock icon included), run:"
+echo "  npm run install-app"
 echo ""
-echo "Then you can open it from Spotlight or add it to your Dock!"
+echo "Or manually:"
+echo "  cp -R \"$DIST_DIR/$APP_NAME.app\" /Applications/"
+echo "  open -a \"$APP_NAME\""
+echo ""
+echo "Dock: launch the app → right-click Dock icon → Options → Keep in Dock"

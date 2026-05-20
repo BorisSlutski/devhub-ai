@@ -51,7 +51,7 @@ describe('NewSessionModal', () => {
     const onStart = vi.fn()
     render(<NewSessionModal scanPath="/tmp" onStart={onStart} onClose={vi.fn()} />)
     const folderA = await screen.findByText('project-a')
-    fireEvent.click(folderA.closest('.new-session-folder-item')!)
+    fireEvent.click(folderA)
     expect(onStart).toHaveBeenCalledWith(mockFolders[0], false)
   })
 
@@ -59,7 +59,7 @@ describe('NewSessionModal', () => {
     const onClose = vi.fn()
     render(<NewSessionModal scanPath="/tmp" onStart={vi.fn()} onClose={onClose} />)
     await screen.findByText('project-a')
-    const closeBtn = screen.getByRole('button', { name: '×' })
+    const closeBtn = screen.getByRole('button', { name: 'x' })
     fireEvent.click(closeBtn)
     expect(onClose).toHaveBeenCalledTimes(1)
   })

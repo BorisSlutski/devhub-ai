@@ -369,6 +369,128 @@
   flex: 1;
   display: flex;
   overflow: hidden;
+  position: relative;
+  min-height: 0;
+}
+
+.dbw-connecting-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.dbw-connecting-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 32px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.dbw-session-tabs {
+  width: 148px;
+  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 6px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.dbw-session-tab-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.dbw-session-tab {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-secondary);
+}
+
+.dbw-session-tab:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+}
+
+.dbw-session-tab.active {
+  background: rgba(88, 166, 255, 0.12);
+  border-color: rgba(88, 166, 255, 0.35);
+  color: var(--text-primary);
+}
+
+.dbw-session-tab-label {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.dbw-session-tab-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.dbw-session-tab-close {
+  flex-shrink: 0;
+  width: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.dbw-session-tab-close:hover {
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--red);
+}
+
+.dbw-session-tab-add {
+  justify-content: center;
+  align-items: center;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-height: 36px;
+}
+
+.dbw-workspace {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* ── Left Sidebar ── */

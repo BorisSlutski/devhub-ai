@@ -160,10 +160,19 @@ function parseProducerPath(name: string): { cluster: string; database: string } 
 }
 
 /**
- * Picks a random integer in [min, max] inclusive.
+ * Picks the next free local port in [min, max], avoiding ports used by active tunnels.
  */
-function randomPort(min: number = PORT_RANGE_MIN, max: number = PORT_RANGE_MAX): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min
+function allocatePort(min: number = PORT_RANGE_MIN, max: number = PORT_RANGE_MAX): number {
+  const used = new Set<number>()
+  for (const tunnel of activeTunnels.values()) {
+    used.add(tunnel.localPort)
+  }
+  for (let port = min; port <= max; port++) {
+    if (!used.has(port)) return port
+  }
+  throw new Error(
+    `No free local ports for database tunnel (${min}-${max}). Close other connections.`,
+  )
 }
 
 /**
@@ -187,6 +196,7 @@ export async function listProducers(type?: 'mysql' | 'mongo'): Promise<DbProduce
   if (!type || type === 'mongo') paths.push(MONGO_PRODUCER_PATH)
 
   const results: DbProducer[] = []
+  const seenNames = new Set<string>()
   const errors: string[] = []
 
   for (const filterPath of paths) {
@@ -220,6 +230,8 @@ export async function listProducers(type?: 'mysql' | 'mongo'): Promise<DbProduce
         const match = line.match(/"item_name"\s*:\s*"([^"]+)"/)
         if (match) {
           const name = match[1]
+          if (seenNames.has(name)) continue
+          seenNames.add(name)
           const { cluster, database } = parseProducerPath(name)
           results.push({ name, cluster, database, dbName: database, type: typeFromPath(name) })
         }
@@ -231,7 +243,8 @@ export async function listProducers(type?: 'mysql' | 'mongo'): Promise<DbProduce
     const items: any[] = parsed?.items ?? (Array.isArray(parsed) ? parsed : [])
     for (const item of items) {
       const name: string = item.item_name ?? item.name ?? ''
-      if (!name) continue
+      if (!name || seenNames.has(name)) continue
+      seenNames.add(name)
       const { cluster, database } = parseProducerPath(name)
       const sra = item?.item_general_info?.secure_remote_access_details
       const dbName: string = sra?.db_name ?? database
@@ -378,7 +391,7 @@ export async function openTunnel(producerName: string): Promise<TunnelInfo> {
     getCredentials(producerName),
   ])
 
-  const localPort = randomPort()
+  const localPort = allocatePort()
   const tunnelId = generateTunnelId()
   const { cluster, database } = parseProducerPath(producerName)
   const dbType = typeFromPath(producerName)

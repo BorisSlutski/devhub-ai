@@ -86,9 +86,14 @@ describe('SettingsModal', () => {
     expect(onBadges.length).toBeGreaterThanOrEqual(1)
   })
 
-  /** Enhancer section has first Enable, Dangerous Mode has second - use last one */
+  /** Enhancer/RTK sections also have Enable/Disable — Dangerous Mode is last in the modal */
   const getDangerousModeEnableButton = () => {
     const buttons = screen.getAllByRole('button', { name: 'Enable' })
+    return buttons[buttons.length - 1]
+  }
+
+  const getDangerousModeDisableButton = () => {
+    const buttons = screen.getAllByRole('button', { name: 'Disable' })
     return buttons[buttons.length - 1]
   }
 
@@ -113,7 +118,7 @@ describe('SettingsModal', () => {
     const input = screen.getByTestId('dangerous-confirm-input')
     fireEvent.change(input, { target: { value: 'I understand the risks' } })
     fireEvent.click(screen.getByText('Confirm'))
-    expect(screen.getByText('ON')).toBeInTheDocument()
+    expect(screen.getAllByText('ON').length).toBeGreaterThanOrEqual(1)
   })
 
   it('clicking Cancel in confirmation dialog hides it', () => {
@@ -128,7 +133,7 @@ describe('SettingsModal', () => {
   it('clicking Disable when dangerous mode is on disables it immediately', () => {
     render(<SettingsModal {...defaultProps} dangerousMode={true} />)
     expect(screen.getAllByText('ON').length).toBeGreaterThanOrEqual(1)
-    fireEvent.click(screen.getByText('Disable'))
+    fireEvent.click(getDangerousModeDisableButton())
     const offBadges = screen.getAllByText('OFF')
     expect(offBadges.length).toBeGreaterThanOrEqual(2)
   })

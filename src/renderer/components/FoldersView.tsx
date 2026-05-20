@@ -6,6 +6,10 @@ import './FoldersView.css'
 
 interface Props {
   scanPath: string
+  favoriteFolderPaths?: string[]
+  foldersSortBy?: 'name' | 'recent'
+  onToggleFavorite?: (path: string) => void
+  onFoldersSortByChange?: (sortBy: 'name' | 'recent') => void
   onStartClaudeSession?: (folder: WorkspaceFolder, useWorktree: boolean) => void
 }
 
@@ -77,6 +81,8 @@ function isPullable(sync: GitSyncStatus | undefined): boolean {
 
 const FolderRow = memo(function FolderRow({
   folder,
+  isFavorite,
+  onToggleFavorite,
   onStartClaudeSession,
   gitInfo,
   syncStatus,
@@ -86,6 +92,8 @@ const FolderRow = memo(function FolderRow({
   onRefresh,
 }: {
   folder: WorkspaceFolder
+  isFavorite: boolean
+  onToggleFavorite?: (path: string) => void
   onStartClaudeSession?: (folder: WorkspaceFolder, useWorktree: boolean) => void
   gitInfo: GitInfo | null | undefined
   syncStatus: GitSyncStatus | undefined
@@ -110,8 +118,18 @@ const FolderRow = memo(function FolderRow({
   const gitLoading = gitInfo === undefined || (refreshing && !syncStatus)
 
   return (
-    <div className="folders-table-row" role="row">
+    <div className="folders-table-row" role="row" data-folder-path={folder.path}>
       <div className="folders-col folders-col-name" role="cell">
+        <button
+          type="button"
+          className={`folder-favorite-btn${isFavorite ? ' is-favorite' : ''}`}
+          onClick={() => onToggleFavorite?.(folder.path)}
+          title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+          aria-label={isFavorite ? `Unfavorite ${folder.name}` : `Favorite ${folder.name}`}
+          aria-pressed={isFavorite}
+        >
+          {isFavorite ? '★' : '☆'}
+        </button>
         <span className="folder-name" title={folder.path}>
           {folder.name}
         </span>
@@ -230,10 +248,34 @@ const FolderRow = memo(function FolderRow({
   )
 })
 
-export function FoldersView({ scanPath, onStartClaudeSession }: Props) {
+function sortFolders(
+  list: WorkspaceFolder[],
+  sortBy: 'name' | 'recent',
+  favoriteSet: Set<string>,
+): WorkspaceFolder[] {
+  return [...list].sort((a, b) => {
+    const aFav = favoriteSet.has(a.path)
+    const bFav = favoriteSet.has(b.path)
+    if (aFav !== bFav) return aFav ? -1 : 1
+    if (sortBy === 'recent') {
+      return new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+    }
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  })
+}
+
+export function FoldersView({
+  scanPath,
+  favoriteFolderPaths = [],
+  foldersSortBy = 'name',
+  onToggleFavorite,
+  onFoldersSortByChange,
+  onStartClaudeSession,
+}: Props) {
   const [folders, setFolders] = useState<WorkspaceFolder[]>([])
   const [search, setSearch] = useState('')
-  const [sortBy, setSortBy] = useState<'name' | 'recent'>('name')
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const sortBy = foldersSortBy
   const [loading, setLoading] = useState(true)
   const [gitInfoMap, setGitInfoMap] = useState<Map<string, GitInfo>>(new Map(gitCache))
   const [syncMap, setSyncMap] = useState<Map<string, GitSyncStatus>>(new Map(syncCache))
@@ -245,6 +287,11 @@ export function FoldersView({ scanPath, onStartClaudeSession }: Props) {
   const [bulkSummary, setBulkSummary] = useState<string | null>(null)
   const loadingPaths = useRef<Set<string>>(new Set())
   const loadingSyncPaths = useRef<Set<string>>(new Set())
+  const tableWrapRef = useRef<HTMLDivElement>(null)
+  const metaQueueRef = useRef<string[]>([])
+  const metaQueuedRef = useRef<Set<string>>(new Set())
+  const metaInFlightRef = useRef(0)
+  const META_CONCURRENCY = 4
 
   useEffect(() => {
     setLoading(true)
@@ -258,18 +305,16 @@ export function FoldersView({ scanPath, onStartClaudeSession }: Props) {
     })
   }, [scanPath])
 
-  const filtered = useMemo(
-    () =>
-      folders
-        .filter((f) => !search || f.name.toLowerCase().includes(search.toLowerCase()))
-        .sort((a, b) => {
-          if (sortBy === 'recent') {
-            return new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
-          }
-          return a.name.localeCompare(b.name)
-        }),
-    [folders, search, sortBy],
-  )
+  const favoriteSet = useMemo(() => new Set(favoriteFolderPaths), [favoriteFolderPaths])
+
+  const filtered = useMemo(() => {
+    const matched = folders.filter(
+      (f) =>
+        (!search || f.name.toLowerCase().includes(search.toLowerCase())) &&
+        (!favoritesOnly || favoriteSet.has(f.path)),
+    )
+    return sortFolders(matched, sortBy, favoriteSet)
+  }, [folders, search, sortBy, favoritesOnly, favoriteSet])
 
   const loadGitInfo = useCallback((path: string, force = false) => {
     if (!force && (gitCache.has(path) || loadingPaths.current.has(path))) return
@@ -310,13 +355,49 @@ export function FoldersView({ scanPath, onStartClaudeSession }: Props) {
     [loadGitInfo, loadSyncStatus],
   )
 
-  // Load git metadata for all visible folders (IntersectionObserver missed rows on first paint)
+  const drainMetaQueue = useCallback(() => {
+    while (metaInFlightRef.current < META_CONCURRENCY && metaQueueRef.current.length > 0) {
+      const path = metaQueueRef.current.shift()!
+      metaInFlightRef.current += 1
+      Promise.resolve(loadFolderMeta(path, false, false)).finally(() => {
+        metaInFlightRef.current -= 1
+        metaQueuedRef.current.delete(path)
+        drainMetaQueue()
+      })
+    }
+  }, [loadFolderMeta])
+
+  const enqueueFolderMeta = useCallback(
+    (path: string) => {
+      if (metaQueuedRef.current.has(path)) return
+      if (gitCache.has(path) && syncCache.has(path)) return
+      metaQueuedRef.current.add(path)
+      metaQueueRef.current.push(path)
+      drainMetaQueue()
+    },
+    [drainMetaQueue],
+  )
+
   useEffect(() => {
     if (loading || filtered.length === 0) return
-    for (const folder of filtered) {
-      loadFolderMeta(folder.path, false, false)
-    }
-  }, [filtered, loading, loadFolderMeta])
+    const root = tableWrapRef.current
+    if (!root || typeof IntersectionObserver === 'undefined') return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue
+          const path = (entry.target as HTMLElement).dataset.folderPath
+          if (path) enqueueFolderMeta(path)
+        }
+      },
+      { root, rootMargin: '80px', threshold: 0 },
+    )
+
+    const rows = root.querySelectorAll<HTMLElement>('[data-folder-path]')
+    rows.forEach((row) => observer.observe(row))
+    return () => observer.disconnect()
+  }, [filtered, loading, enqueueFolderMeta])
 
   const refreshOne = useCallback(
     async (path: string) => {
@@ -426,6 +507,13 @@ export function FoldersView({ scanPath, onStartClaudeSession }: Props) {
       return
     }
 
+    const confirmed = window.confirm(
+      `Pull ${gitPaths.length} git folder(s)?\n\n` +
+        'Each repo will checkout its main/master branch from origin and run git pull --ff-only. ' +
+        'Repos with uncommitted changes are skipped.',
+    )
+    if (!confirmed) return
+
     setBulkPulling(true)
     setBulkSummary(`Pulling ${gitPaths.length} folder(s) in background…`)
     bulkPullPendingRef.current = new Set(gitPaths)
@@ -488,19 +576,33 @@ export function FoldersView({ scanPath, onStartClaudeSession }: Props) {
         </button>
         <button
           type="button"
-          className={`btn btn-sm ${sortBy === 'name' ? 'btn-accent' : ''}`}
-          onClick={() => setSortBy('name')}
+          className={`btn btn-sm ${favoritesOnly ? 'btn-accent' : ''}`}
+          onClick={() => setFavoritesOnly((v) => !v)}
+          title="Show only favorite folders"
+          aria-pressed={favoritesOnly}
         >
-          A-Z
+          ★ Favorites
+        </button>
+        <button
+          type="button"
+          className={`btn btn-sm ${sortBy === 'name' ? 'btn-accent' : ''}`}
+          onClick={() => onFoldersSortByChange?.('name')}
+          aria-pressed={sortBy === 'name'}
+        >
+          Name
         </button>
         <button
           type="button"
           className={`btn btn-sm ${sortBy === 'recent' ? 'btn-accent' : ''}`}
-          onClick={() => setSortBy('recent')}
+          onClick={() => onFoldersSortByChange?.('recent')}
+          aria-pressed={sortBy === 'recent'}
         >
           Recent
         </button>
-        <span className="folders-count">{filtered.length} folders</span>
+        <span className="folders-count">
+          {filtered.length} folder{filtered.length === 1 ? '' : 's'}
+          {favoriteSet.size > 0 && !favoritesOnly ? ` · ${favoriteSet.size} starred` : ''}
+        </span>
       </div>
 
       {bulkSummary && (
@@ -512,7 +614,7 @@ export function FoldersView({ scanPath, onStartClaudeSession }: Props) {
         </div>
       )}
 
-      <div className="folders-table-wrap">
+      <div className="folders-table-wrap" ref={tableWrapRef}>
         <div className="folders-table-header" role="row">
           <div className="folders-col folders-col-name" role="columnheader">
             Folder
@@ -535,10 +637,19 @@ export function FoldersView({ scanPath, onStartClaudeSession }: Props) {
         </div>
 
         <div className="folders-table-body" role="rowgroup">
+          {filtered.length === 0 ? (
+            <div className="folders-empty">
+              {favoritesOnly
+                ? 'No favorite folders yet. Star a repo from the list.'
+                : 'No folders match your filter.'}
+            </div>
+          ) : null}
           {filtered.map((folder) => (
             <FolderRow
               key={folder.path}
               folder={folder}
+              isFavorite={favoriteSet.has(folder.path)}
+              onToggleFavorite={onToggleFavorite}
               onStartClaudeSession={onStartClaudeSession}
               gitInfo={gitInfoMap.has(folder.path) ? gitInfoMap.get(folder.path)! : undefined}
               syncStatus={syncMap.get(folder.path)}

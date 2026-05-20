@@ -1,6 +1,8 @@
 <div align="center">
 
-<img src="resources/logo.jpeg" width="600" alt="DevHub-AI" />
+<img src="resources/icon.png" width="160" alt="DevHub-AI app icon" />
+
+<img src="resources/logo.jpeg" width="520" alt="DevHub-AI" />
 
 # DevHub-AI
 
@@ -168,11 +170,72 @@ npm run dev
 # Production build
 npm run build
 
-# Package as macOS .app
+# Package as macOS .app (uses resources/icon.icns for Dock & Finder)
 npm run package
+```
 
-# Install to Applications
+### Install on macOS (Applications folder)
+
+After `npm run package`, install the app so it appears in **Launchpad**, **Spotlight**, and the **Dock** with the DevHub-AI icon:
+
+**Option A — one command (recommended)**
+
+```bash
+npm run install-app
+```
+
+This copies `dist/DevHub-AI.app` to `/Applications/DevHub-AI.app` and clears quarantine flags.
+
+**Option B — manual copy**
+
+```bash
 cp -R dist/DevHub-AI.app /Applications/
+xattr -dr com.apple.quarantine /Applications/DevHub-AI.app
+open /Applications/DevHub-AI.app
+```
+
+**Option C — Finder**
+
+1. Open the `dist` folder in the project.
+2. Drag **DevHub-AI.app** into **Applications** (or onto the Applications shortcut in a Finder sidebar).
+3. Double-click **DevHub-AI** in Applications to launch.
+
+**Keep the icon in the Dock (task bar)**
+
+1. Open DevHub-AI from Applications (or Spotlight: `Cmd+Space`, type `DevHub-AI`).
+2. Right-click the app icon in the Dock.
+3. Choose **Options → Keep in Dock**.
+
+**Icon still shows the old Electron logo?**
+
+| If you launch via… | Icon you see |
+|---|---|
+| `npm run dev` | Generic **Electron** icon (expected) |
+| `/Applications/DevHub-AI.app` | Custom **DevHub-AI** hub icon |
+
+Fix the installed app icon:
+
+```bash
+npm run icons          # regenerate icon.icns from icon.svg
+npm run install-app    # reinstall to /Applications
+npm run refresh-icon   # re-copy icon + restart Dock cache + launch app
+open /Applications/DevHub-AI.app
+```
+
+If Finder still shows the old icon, log out and back in (macOS caches app icons aggressively).
+
+**Regenerate app icon assets** (from `resources/icon.svg`):
+
+```bash
+npm run icons    # writes icon.png, logo.jpeg, icon.icns
+npm run package  # rebuild .app with new icon
+```
+
+**Developer install** (symlinks source into `/Applications` for fast iteration):
+
+```bash
+npm run install-dev
+npm run build    # rebuild after code changes, then relaunch
 ```
 
 ---

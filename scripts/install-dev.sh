@@ -56,7 +56,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
   <key>CFBundleExecutable</key>
   <string>DevHub-AI</string>
   <key>CFBundleIconFile</key>
-  <string>DevHub-AI.icns</string>
+  <string>DevHub-AI</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>

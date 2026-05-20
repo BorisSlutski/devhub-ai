@@ -16,6 +16,17 @@ vi.mock('./pty-manager', () => ({
   },
 }))
 
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('os')>()
+  return {
+    ...actual,
+    cpus: () => [{}, {}, {}, {}],
+    totalmem: () => 16 * 1024 ** 3,
+    freemem: () => 8 * 1024 ** 3,
+    loadavg: () => [1.5, 1.2, 1.0],
+  }
+})
+
 const { execFile } = await import('child_process')
 const { ptyManager } = await import('./pty-manager')
 

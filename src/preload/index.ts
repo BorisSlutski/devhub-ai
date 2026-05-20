@@ -377,6 +377,11 @@ const api = {
   }> => ipcRenderer.invoke('db-connect', producerName),
   dbDisconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('db-disconnect', connectionId),
+  dbListConnections: (): Promise<{
+    success: boolean
+    connections: { id: string; host: string; port: number; user: string; database: string; connected: boolean }[]
+    error?: string
+  }> => ipcRenderer.invoke('db-list-connections'),
   dbExecuteQuery: (connectionId: string, sql: string): Promise<{
     columns: any[]; rows: any[][]; rowCount: number;
     affectedRows: number; executionTimeMs: number; error?: string;

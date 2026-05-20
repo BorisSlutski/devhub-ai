@@ -3,8 +3,24 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { FoldersView } from './FoldersView'
 
+class MockIntersectionObserver {
+  readonly root = null
+  readonly rootMargin = ''
+  readonly thresholds: ReadonlyArray<number> = []
+  constructor(private readonly cb: IntersectionObserverCallback) {}
+  observe(target: Element) {
+    this.cb(
+      [{ isIntersecting: true, target } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    )
+  }
+  unobserve() {}
+  disconnect() {}
+}
+
 describe('FoldersView', () => {
   beforeEach(() => {
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
     vi.mocked(window.api.listWorkspaceFolders).mockResolvedValue([
       {
         name: 'my-repo',
@@ -40,6 +56,94 @@ describe('FoldersView', () => {
     await waitFor(() => {
       expect(screen.getByText('3 behind')).toBeInTheDocument()
     })
+  })
+
+  it('sorts favorites first when ordering by name', async () => {
+    vi.mocked(window.api.listWorkspaceFolders).mockResolvedValue([
+      {
+        name: 'zebra',
+        path: '/tmp/zebra',
+        modifiedAt: new Date().toISOString(),
+        gitBranch: null,
+        gitRemote: null,
+      },
+      {
+        name: 'alpha',
+        path: '/tmp/alpha',
+        modifiedAt: new Date().toISOString(),
+        gitBranch: null,
+        gitRemote: null,
+      },
+    ])
+
+    render(
+      <FoldersView
+        scanPath="/tmp"
+        favoriteFolderPaths={['/tmp/zebra']}
+        foldersSortBy="name"
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('zebra')).toBeInTheDocument()
+    })
+
+    const names = screen.getAllByText(/^(zebra|alpha)$/).map((el) => el.textContent)
+    expect(names[0]).toBe('zebra')
+    expect(names[1]).toBe('alpha')
+  })
+
+  it('toggles favorite via star button', async () => {
+    const user = userEvent.setup()
+    const onToggleFavorite = vi.fn()
+
+    render(
+      <FoldersView scanPath="/tmp" onToggleFavorite={onToggleFavorite} />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Favorite my-repo/i)).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByLabelText(/Favorite my-repo/i))
+    expect(onToggleFavorite).toHaveBeenCalledWith('/tmp/my-repo')
+  })
+
+  it('shows only favorites when filter is on', async () => {
+    const user = userEvent.setup()
+    vi.mocked(window.api.listWorkspaceFolders).mockResolvedValue([
+      {
+        name: 'fav-repo',
+        path: '/tmp/fav-repo',
+        modifiedAt: new Date().toISOString(),
+        gitBranch: null,
+        gitRemote: null,
+      },
+      {
+        name: 'other-repo',
+        path: '/tmp/other-repo',
+        modifiedAt: new Date().toISOString(),
+        gitBranch: null,
+        gitRemote: null,
+      },
+    ])
+
+    render(
+      <FoldersView
+        scanPath="/tmp"
+        favoriteFolderPaths={['/tmp/fav-repo']}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('fav-repo')).toBeInTheDocument()
+      expect(screen.getByText('other-repo')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: /Favorites/i }))
+
+    expect(screen.getByText('fav-repo')).toBeInTheDocument()
+    expect(screen.queryByText('other-repo')).not.toBeInTheDocument()
   })
 
   it('per-row refresh fetches git sync status', async () => {

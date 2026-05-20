@@ -342,6 +342,24 @@ export function App() {
     persist({ ...state, workspaceChosen: true })
   }, [state, persist])
 
+  const handleToggleFavoriteFolder = useCallback(
+    (path: string) => {
+      const current = state.favoriteFolderPaths ?? []
+      const next = current.includes(path)
+        ? current.filter((p) => p !== path)
+        : [...current, path]
+      persist({ ...state, favoriteFolderPaths: next })
+    },
+    [state, persist],
+  )
+
+  const handleFoldersSortByChange = useCallback(
+    (foldersSortBy: 'name' | 'recent') => {
+      persist({ ...state, foldersSortBy })
+    },
+    [state, persist],
+  )
+
   if (!loaded) {
     return (
       <div className="skeleton-app-loading">
@@ -508,16 +526,20 @@ export function App() {
         </ErrorBoundary>
       </div>
 
-      <div style={{
-        display: activeTab === 'airflow' ? 'flex' : 'none',
-        flex: 1,
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}>
-        <ErrorBoundary name="Airflow">
-          <AirflowView scanPath={state.scanPath} />
-        </ErrorBoundary>
-      </div>
+      {activeTab === 'airflow' && (
+        <div
+          style={{
+            display: 'flex',
+            flex: 1,
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <ErrorBoundary name="Airflow">
+            <AirflowView scanPath={state.scanPath} />
+          </ErrorBoundary>
+        </div>
+      )}
 
       {activeTab === 'db-access' || activeTab === 'airflow' ? null : activeTab === 'agents' ? (
         <ErrorBoundary name="Agents">
@@ -545,6 +567,10 @@ export function App() {
         <ErrorBoundary name="Folders">
           <FoldersView
             scanPath={state.scanPath}
+            favoriteFolderPaths={state.favoriteFolderPaths}
+            foldersSortBy={state.foldersSortBy ?? 'name'}
+            onToggleFavorite={handleToggleFavoriteFolder}
+            onFoldersSortByChange={handleFoldersSortByChange}
             onStartClaudeSession={(folder, useWorktree) => {
               handleStartClaudeSession(folder, useWorktree)
             }}
