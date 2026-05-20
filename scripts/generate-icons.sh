@@ -1,31 +1,23 @@
 #!/bin/bash
-# Regenerate macOS app icons and README logo assets from resources/icon.svg
+# Regenerate macOS app icons from resources/icon.png (source of truth)
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SVG="$PROJECT_DIR/resources/icon.svg"
+PNG="$PROJECT_DIR/resources/icon.png"
 ICONSET="$PROJECT_DIR/resources/icon.iconset"
 
-if [ ! -f "$SVG" ]; then
-  echo "Missing $SVG"
+if [ ! -f "$PNG" ]; then
+  echo "Missing $PNG"
   exit 1
 fi
 
-if ! command -v rsvg-convert >/dev/null 2>&1; then
-  echo "rsvg-convert required (brew install librsvg)"
-  exit 1
-fi
-
-echo "Generating icon.png (1024)..."
-rsvg-convert -w 1024 -h 1024 "$SVG" -o "$PROJECT_DIR/resources/icon.png"
-
-echo "Generating icon.iconset..."
+echo "Generating icon.iconset from icon.png..."
 rm -rf "$ICONSET"
 mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
   dbl=$((size * 2))
-  rsvg-convert -w "$size" -h "$size" "$SVG" -o "$ICONSET/icon_${size}x${size}.png"
-  rsvg-convert -w "$dbl" -h "$dbl" "$SVG" -o "$ICONSET/icon_${size}x${size}@2x.png"
+  sips -z "$size" "$size" "$PNG" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  sips -z "$dbl" "$dbl" "$PNG" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
 
 echo "Generating icon.icns..."
@@ -39,5 +31,5 @@ echo "Patching node_modules Electron.app for npm run dev..."
 bash "$PROJECT_DIR/scripts/patch-electron-dev-icon.sh"
 
 echo "Done:"
-echo "  resources/icon.png"
-echo "  resources/icon.icns"
+echo "  resources/icon.png  (source)"
+echo "  resources/icon.icns   (generated)"

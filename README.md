@@ -223,7 +223,7 @@ npm run dev
 Fix the **installed** app icon:
 
 ```bash
-npm run icons          # regenerate icon.icns from icon.svg
+npm run icons          # regenerate icon.icns from icon.png
 npm run install-app    # reinstall to /Applications
 npm run refresh-icon   # re-copy icon + restart Dock cache + launch app
 open /Applications/DevHub-AI.app
@@ -231,10 +231,10 @@ open /Applications/DevHub-AI.app
 
 If Finder still shows the old icon, log out and back in (macOS caches app icons aggressively).
 
-**Regenerate app icon assets** (from `resources/icon.svg`):
+**Regenerate app icon assets** (from `resources/icon.png`):
 
 ```bash
-npm run icons    # writes icon.png and icon.icns from icon.svg
+npm run icons    # writes icon.icns from icon.png
 npm run package  # rebuild .app with new icon
 ```
 

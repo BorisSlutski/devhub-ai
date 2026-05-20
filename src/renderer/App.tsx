@@ -21,6 +21,7 @@ import { AirflowView } from './components/AirflowView'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Skeleton } from './components/Skeleton'
 import { Project } from '../shared/types'
+import appIcon from '../../resources/icon.png'
 
 type TabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access' | 'airflow'
 
@@ -403,8 +404,9 @@ export function App() {
         height: '100vh', background: 'var(--bg-primary)', color: 'var(--text-primary)',
         padding: 40, textAlign: 'center', gap: 24,
       }}>
-        <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em' }}>
-          <span style={{ opacity: 0.4, marginRight: 8 }}>DHAI</span>DevHub-AI
+        <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <img src={appIcon} alt="" width={40} height={40} style={{ borderRadius: 10 }} />
+          DevHub-AI
         </div>
         <p style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 420, lineHeight: 1.6 }}>
           Choose the root folder that contains your projects.
@@ -442,7 +444,7 @@ export function App() {
   return (
     <>
       <div className="titlebar">
-        <span className="titlebar-logo">DHAI</span>
+        <img src={appIcon} alt="" className="titlebar-logo" />
         DevHub-AI
         <div className="theme-switcher">
           <button className={`theme-btn ${theme === 'light' ? 'active' : ''}`} onClick={() => setTheme('light')} title="Light mode">☀</button>
