@@ -285,6 +285,7 @@ describe('ClaudeSessionsView', () => {
         'true',
       )
     })
+    expect(screen.queryByTestId('terminal-first')).not.toBeInTheDocument()
     fireEvent.click(screen.getByText('first-folder'))
     await waitFor(() => {
       expect(screen.getByTestId('terminal-first')).toHaveAttribute(
@@ -292,5 +293,6 @@ describe('ClaudeSessionsView', () => {
         'true',
       )
     })
+    expect(screen.queryByTestId('terminal-second')).not.toBeInTheDocument()
   })
 })

@@ -26,10 +26,19 @@ export function registerResourceHandlers() {
       } catch { /* window destroyed */ }
     }
     resourceMonitor.onUpdate(updateHandler)
+    if (!resourceMonitor.isPolling()) {
+      resourceMonitor.start(5000)
+    }
+    void resourceMonitor.getSnapshot().then((snapshot) => {
+      updateHandler?.(snapshot)
+    })
   })
 
   ipcMain.handle('resource-unsubscribe', () => {
     unsubscribe()
+    if (!resourceMonitor.hasSubscribers()) {
+      resourceMonitor.stop()
+    }
   })
 }
 

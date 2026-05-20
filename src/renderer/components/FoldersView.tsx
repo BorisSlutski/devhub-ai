@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, memo, useMemo, useRef } from 'react'
 import { WorkspaceFolder } from '../../shared/types'
-import type { GitSyncStatus } from '../../shared/ipc-types'
+import type { GitFolderMeta, GitSyncStatus } from '../../shared/ipc-types'
 import { Skeleton } from './Skeleton'
 import './FoldersView.css'
 
@@ -31,8 +31,7 @@ interface GitInfo {
   gitRemote: string | null
 }
 
-const gitCache = new Map<string, GitInfo>()
-const syncCache = new Map<string, GitSyncStatus>()
+const metaCache = new Map<string, GitFolderMeta>()
 
 function syncLabel(status: GitSyncStatus): string {
   switch (status.state) {
@@ -277,8 +276,7 @@ export function FoldersView({
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const sortBy = foldersSortBy
   const [loading, setLoading] = useState(true)
-  const [gitInfoMap, setGitInfoMap] = useState<Map<string, GitInfo>>(new Map(gitCache))
-  const [syncMap, setSyncMap] = useState<Map<string, GitSyncStatus>>(new Map(syncCache))
+  const [metaMap, setMetaMap] = useState<Map<string, GitFolderMeta>>(new Map(metaCache))
   const [pullingPaths, setPullingPaths] = useState<Set<string>>(new Set())
   const [refreshingPaths, setRefreshingPaths] = useState<Set<string>>(new Set())
   const [bulkPulling, setBulkPulling] = useState(false)
@@ -286,7 +284,6 @@ export function FoldersView({
   const [bulkRefreshing, setBulkRefreshing] = useState(false)
   const [bulkSummary, setBulkSummary] = useState<string | null>(null)
   const loadingPaths = useRef<Set<string>>(new Set())
-  const loadingSyncPaths = useRef<Set<string>>(new Set())
   const tableWrapRef = useRef<HTMLDivElement>(null)
   const metaQueueRef = useRef<string[]>([])
   const metaQueuedRef = useRef<Set<string>>(new Set())
@@ -295,12 +292,10 @@ export function FoldersView({
 
   useEffect(() => {
     setLoading(true)
-    gitCache.clear()
-    syncCache.clear()
+    metaCache.clear()
     window.api.listWorkspaceFolders(scanPath).then((f) => {
       setFolders(f)
-      setGitInfoMap(new Map())
-      setSyncMap(new Map())
+      setMetaMap(new Map())
       setLoading(false)
     })
   }, [scanPath])
@@ -316,44 +311,22 @@ export function FoldersView({
     return sortFolders(matched, sortBy, favoriteSet)
   }, [folders, search, sortBy, favoritesOnly, favoriteSet])
 
-  const loadGitInfo = useCallback((path: string, force = false) => {
-    if (!force && (gitCache.has(path) || loadingPaths.current.has(path))) return
-    loadingPaths.current.add(path)
-    window.api.getGitInfo(path).then((info) => {
-      gitCache.set(path, info)
-      loadingPaths.current.delete(path)
-      setGitInfoMap((prev) => {
-        const next = new Map(prev)
-        next.set(path, info)
-        return next
-      })
-    })
-  }, [])
-
-  const loadSyncStatus = useCallback((path: string, fetch = false, force = false) => {
+  const loadFolderMeta = useCallback((path: string, fetch = false, force = false) => {
     const cacheKey = fetch ? `${path}:fetch` : path
-    if (!force && !fetch && syncCache.has(path)) return
-    if (loadingSyncPaths.current.has(cacheKey)) return
-    loadingSyncPaths.current.add(cacheKey)
-    return window.api.getGitSyncStatus(path, fetch).then((status) => {
-      syncCache.set(path, status)
-      loadingSyncPaths.current.delete(cacheKey)
-      setSyncMap((prev) => {
+    if (!force && !fetch && metaCache.has(path)) return Promise.resolve(metaCache.get(path)!)
+    if (loadingPaths.current.has(cacheKey)) return Promise.resolve(undefined)
+    loadingPaths.current.add(cacheKey)
+    return window.api.getFolderGitMeta(path, fetch).then((meta) => {
+      metaCache.set(path, meta)
+      loadingPaths.current.delete(cacheKey)
+      setMetaMap((prev) => {
         const next = new Map(prev)
-        next.set(path, status)
+        next.set(path, meta)
         return next
       })
-      return status
+      return meta
     })
   }, [])
-
-  const loadFolderMeta = useCallback(
-    (path: string, fetch = false, force = false) => {
-      loadGitInfo(path, force)
-      return loadSyncStatus(path, fetch, force)
-    },
-    [loadGitInfo, loadSyncStatus],
-  )
 
   const drainMetaQueue = useCallback(() => {
     while (metaInFlightRef.current < META_CONCURRENCY && metaQueueRef.current.length > 0) {
@@ -370,7 +343,7 @@ export function FoldersView({
   const enqueueFolderMeta = useCallback(
     (path: string) => {
       if (metaQueuedRef.current.has(path)) return
-      if (gitCache.has(path) && syncCache.has(path)) return
+      if (metaCache.has(path)) return
       metaQueuedRef.current.add(path)
       metaQueueRef.current.push(path)
       drainMetaQueue()
@@ -399,39 +372,24 @@ export function FoldersView({
     return () => observer.disconnect()
   }, [filtered, loading, enqueueFolderMeta])
 
-  const refreshOne = useCallback(
-    async (path: string) => {
-      setRefreshingPaths((prev) => new Set(prev).add(path))
-      gitCache.delete(path)
-      syncCache.delete(path)
-      try {
-        await Promise.all([
-          window.api.getGitInfo(path).then((info) => {
-            gitCache.set(path, info)
-            setGitInfoMap((prev) => {
-              const next = new Map(prev)
-              next.set(path, info)
-              return next
-            })
-          }),
-          loadSyncStatus(path, true, true),
-        ])
-      } finally {
-        setRefreshingPaths((prev) => {
-          const next = new Set(prev)
-          next.delete(path)
-          return next
-        })
-      }
-    },
-    [loadSyncStatus],
-  )
+  const refreshOne = useCallback(async (path: string) => {
+    setRefreshingPaths((prev) => new Set(prev).add(path))
+    metaCache.delete(path)
+    try {
+      await loadFolderMeta(path, true, true)
+    } finally {
+      setRefreshingPaths((prev) => {
+        const next = new Set(prev)
+        next.delete(path)
+        return next
+      })
+    }
+  }, [loadFolderMeta])
 
   const refreshAll = useCallback(async () => {
     setBulkRefreshing(true)
     setBulkSummary(null)
-    gitCache.clear()
-    syncCache.clear()
+    metaCache.clear()
     try {
       await Promise.all(filtered.map((f) => refreshOne(f.path)))
       setBulkSummary(`Refreshed ${filtered.length} folder(s)`)
@@ -487,13 +445,12 @@ export function FoldersView({
   const resolveGitPaths = useCallback(() => {
     return filtered
       .filter((f) => {
-        const info = gitInfoMap.get(f.path)
-        if (info?.gitBranch) return true
-        const sync = syncMap.get(f.path)
-        return isPullable(sync)
+        const meta = metaMap.get(f.path)
+        if (meta?.gitBranch) return true
+        return isPullable(meta)
       })
       .map((f) => f.path)
-  }, [filtered, gitInfoMap, syncMap])
+  }, [filtered, metaMap])
 
   const handlePullAll = useCallback(async () => {
     let gitPaths = resolveGitPaths()
@@ -651,8 +608,15 @@ export function FoldersView({
               isFavorite={favoriteSet.has(folder.path)}
               onToggleFavorite={onToggleFavorite}
               onStartClaudeSession={onStartClaudeSession}
-              gitInfo={gitInfoMap.has(folder.path) ? gitInfoMap.get(folder.path)! : undefined}
-              syncStatus={syncMap.get(folder.path)}
+              gitInfo={
+                metaMap.has(folder.path)
+                  ? {
+                      gitBranch: metaMap.get(folder.path)!.gitBranch,
+                      gitRemote: metaMap.get(folder.path)!.gitRemote,
+                    }
+                  : undefined
+              }
+              syncStatus={metaMap.get(folder.path)}
               pulling={pullingPaths.has(folder.path)}
               refreshing={refreshingPaths.has(folder.path)}
               onPull={() => handlePullOne(folder.path)}

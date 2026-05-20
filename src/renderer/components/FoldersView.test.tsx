@@ -30,11 +30,9 @@ describe('FoldersView', () => {
         gitRemote: null,
       },
     ])
-    vi.mocked(window.api.getGitInfo).mockResolvedValue({
+    vi.mocked(window.api.getFolderGitMeta).mockResolvedValue({
       gitBranch: 'main',
       gitRemote: 'https://github.com/org/my-repo',
-    })
-    vi.mocked(window.api.getGitSyncStatus).mockResolvedValue({
       isGitRepo: true,
       baseBranch: 'main',
       currentBranch: 'main',
@@ -154,11 +152,11 @@ describe('FoldersView', () => {
       expect(screen.getByLabelText(/Refresh git status for my-repo/i)).toBeInTheDocument()
     })
 
-    vi.mocked(window.api.getGitSyncStatus).mockClear()
+    vi.mocked(window.api.getFolderGitMeta).mockClear()
     await user.click(screen.getByLabelText(/Refresh git status for my-repo/i))
 
     await waitFor(() => {
-      expect(window.api.getGitSyncStatus).toHaveBeenCalledWith('/tmp/my-repo', true)
+      expect(window.api.getFolderGitMeta).toHaveBeenCalledWith('/tmp/my-repo', true)
     })
   })
 })

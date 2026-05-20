@@ -1,59 +1,71 @@
 import { ipcMain, shell, BrowserWindow, type WebContents } from 'electron'
 import { join } from 'path'
-import { readdirSync, statSync, mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs'
+import { readdir, stat } from 'fs/promises'
+import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs'
 import { execSync, exec } from 'child_process'
 import { promisify } from 'util'
 import { homedir } from 'os'
 import { WorkspaceFolder } from '../../shared/types'
-import { buildGitSyncStatus, pullFolderToBase } from '../git-sync'
+import { buildGitFolderMeta, buildGitSyncStatus, pullFolderToBase } from '../git-sync'
+import { getCachedFolderMeta, setCachedFolderMeta, invalidateFolderMeta } from '../git-meta-cache'
 
 const execAsync = promisify(exec)
 
 export function registerGitHandlers() {
-  ipcMain.handle('list-workspace-folders', (_event, scanPath: string) => {
+  ipcMain.handle('list-workspace-folders', async (_event, scanPath: string) => {
     const folders: WorkspaceFolder[] = []
+    const STAT_BATCH = 32
     try {
-      const entries = readdirSync(scanPath)
-      for (const entry of entries) {
-        if (entry.startsWith('.') || entry === 'node_modules') continue
-        const fullPath = join(scanPath, entry)
-        try {
-          const stat = statSync(fullPath)
-          if (!stat.isDirectory()) continue
-          folders.push({
-            name: entry,
-            path: fullPath,
-            modifiedAt: stat.mtime.toISOString(),
-            gitBranch: null,
-            gitRemote: null
-          })
-        } catch { continue }
+      const entries = await readdir(scanPath)
+      const candidates = entries.filter(
+        (entry) => !entry.startsWith('.') && entry !== 'node_modules',
+      )
+      for (let i = 0; i < candidates.length; i += STAT_BATCH) {
+        const batch = candidates.slice(i, i + STAT_BATCH)
+        const batchResults = await Promise.all(
+          batch.map(async (entry) => {
+            const fullPath = join(scanPath, entry)
+            try {
+              const st = await stat(fullPath)
+              if (!st.isDirectory()) return null
+              return {
+                name: entry,
+                path: fullPath,
+                modifiedAt: st.mtime.toISOString(),
+                gitBranch: null,
+                gitRemote: null,
+              } satisfies WorkspaceFolder
+            } catch {
+              return null
+            }
+          }),
+        )
+        for (const item of batchResults) {
+          if (item) folders.push(item)
+        }
       }
     } catch { /* ignore */ }
     return folders.sort((a, b) => a.name.localeCompare(b.name))
   })
 
+  ipcMain.handle('get-folder-git-meta', async (_event, folderPath: string, fetch = false) => {
+    if (!fetch) {
+      const cached = getCachedFolderMeta(folderPath)
+      if (cached) return cached
+    }
+    const meta = buildGitFolderMeta(folderPath, fetch)
+    setCachedFolderMeta(folderPath, meta)
+    return meta
+  })
+
   ipcMain.handle('get-git-info', async (_event, folderPath: string) => {
-    let gitBranch: string | null = null
-    let gitRemote: string | null = null
-    try {
-      const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 3000
-      })
-      gitBranch = branch.trim()
-      try {
-        const { stdout: remote } = await execAsync('git remote get-url origin', {
-          cwd: folderPath, encoding: 'utf-8', timeout: 3000
-        })
-        const r = remote.trim()
-        if (r.includes('github.com')) {
-          gitRemote = r.replace(/^git@github\.com:/, 'https://github.com/').replace(/\.git$/, '')
-        } else {
-          gitRemote = r
-        }
-      } catch { /* no remote */ }
-    } catch { /* not a git repo */ }
-    return { gitBranch, gitRemote }
+    const cached = getCachedFolderMeta(folderPath)
+    if (cached) {
+      return { gitBranch: cached.gitBranch, gitRemote: cached.gitRemote }
+    }
+    const meta = buildGitFolderMeta(folderPath, false)
+    setCachedFolderMeta(folderPath, meta)
+    return { gitBranch: meta.gitBranch, gitRemote: meta.gitRemote }
   })
 
   ipcMain.handle('get-git-status', async (_event, folderPath: string) => {
@@ -205,6 +217,7 @@ export function registerGitHandlers() {
     error?: string
     branch?: string | null
   }) {
+    invalidateFolderMeta(payload.path)
     const win = BrowserWindow.fromWebContents(sender)
     if (win && !win.isDestroyed()) {
       win.webContents.send('git-pull-finished', payload)

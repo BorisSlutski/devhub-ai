@@ -18,6 +18,17 @@ const mockApi = {
   openInFinder: vi.fn(),
   openInTerminal: vi.fn(),
   getGitInfo: vi.fn().mockResolvedValue({ gitBranch: null, gitRemote: null }),
+  getFolderGitMeta: vi.fn().mockResolvedValue({
+    gitBranch: null,
+    gitRemote: null,
+    isGitRepo: false,
+    baseBranch: null,
+    currentBranch: null,
+    commitsBehind: 0,
+    commitsAhead: 0,
+    uncommitted: 0,
+    state: 'not-git',
+  }),
   getGitStatus: vi.fn(),
   getGitSyncStatus: vi.fn().mockResolvedValue({
     isGitRepo: false,

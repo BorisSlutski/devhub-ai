@@ -145,6 +145,7 @@ export class ResourceMonitor {
     this.intervalId = setInterval(() => {
       this.poll()
     }, intervalMs)
+    void this.poll()
   }
 
   /** Stop periodic polling */
@@ -153,6 +154,14 @@ export class ResourceMonitor {
       clearInterval(this.intervalId)
       this.intervalId = null
     }
+  }
+
+  isPolling(): boolean {
+    return this.intervalId != null
+  }
+
+  hasSubscribers(): boolean {
+    return this.callbacks.length > 0
   }
 
   /** Set idle mode (longer cache TTL, used when app is not focused) */

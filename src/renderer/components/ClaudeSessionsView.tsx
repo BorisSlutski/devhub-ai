@@ -101,7 +101,8 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
   const [showHints, setShowHints] = useState(false)
   const [editingNicknameId, setEditingNicknameId] = useState<string | null>(null)
   const [dragSessionId, setDragSessionId] = useState<string | null>(null)
-  const { snapshot: resourceSnapshot, getSessionMetrics, isLoading: resourceLoading } = useResourceMonitor()
+  const { snapshot: resourceSnapshot, getSessionMetrics, isLoading: resourceLoading } =
+    useResourceMonitor(sidePanel === 'resources')
   const dragging = useRef(false)
   const bodyRef = useRef<HTMLDivElement>(null)
   const splitPaneToolbarRef = useRef<HTMLDivElement>(null)
@@ -754,28 +755,27 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
             />
           ) : (
           <div className="claude-sessions-terminal">
-          {sessions.map((session) => (
+          {activeSession && (
             <div
-              key={session.id}
+              key={activeSession.id}
               className={`claude-session-terminal-wrapper ${chatInputEnabled ? 'with-chat-input' : ''}`}
-              style={{ display: activeSessionId === session.id ? 'flex' : 'none', flex: 1, minHeight: 0 }}
+              style={{ display: 'flex', flex: 1, minHeight: 0 }}
             >
-              {session.initializing ? (
+              {activeSession.initializing ? (
                 <WorkspaceInitProgress
-                  sessionId={session.id}
+                  sessionId={activeSession.id}
                   onReady={() => {
                     // Progress will transition automatically when pty-create completes
                   }}
-                  onCancel={() => onCloseSession(session.id)}
+                  onCancel={() => onCloseSession(activeSession.id)}
                   onRetry={() => {
-                    // Close and re-trigger session creation
-                    onCloseSession(session.id)
+                    onCloseSession(activeSession.id)
                     onNewSession()
                   }}
                 />
               ) : (
                 <>
-                  {session.dangerousMode && activeSessionId === session.id && (
+                  {activeSession.dangerousMode && (
                     <div style={{
                       height: 3,
                       background: 'linear-gradient(90deg, #f85149, #da3633)',
@@ -783,35 +783,35 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
                     }} title="Dangerous mode — Claude executes commands without asking permission" />
                   )}
                   <SessionSplitPane
-                    sessionId={session.id}
-                    active={activeSessionId === session.id}
-                    onWaitingChange={(waiting) => handleWaitingChange(session.id, waiting)}
+                    sessionId={activeSession.id}
+                    active
+                    onWaitingChange={(waiting) => handleWaitingChange(activeSession.id, waiting)}
                     toolbarRef={splitPaneToolbarRef}
                     onNewSession={onNewSession}
                   />
-                  {chatInputEnabled && activeSessionId === session.id && !session.exited && (
+                  {chatInputEnabled && !activeSession.exited && (
                     <ChatInputBar
-                      sessionId={session.id}
-                      rootPath={session.worktreePath || session.folderPath}
+                      sessionId={activeSession.id}
+                      rootPath={activeSession.worktreePath || activeSession.folderPath}
                       onSend={handleChatSend}
                       onImageUpload={handleChatImageUpload}
-                      disabled={session.exited}
+                      disabled={activeSession.exited}
                     />
                   )}
-                  {session.exited && activeSessionId === session.id && (
+                  {activeSession.exited && (
                     <div className="claude-session-exited-overlay">
                       <div className="claude-session-exited-msg">Session ended</div>
-                      {session.claudeSessionId && (
+                      {activeSession.claudeSessionId && (
                         <button
                           className="btn btn-primary"
-                          onClick={() => onResumeSession(session.id)}
+                          onClick={() => onResumeSession(activeSession.id)}
                         >
                           Resume Session
                         </button>
                       )}
                       <button
                         className="btn btn-sm"
-                        onClick={() => onCloseSession(session.id)}
+                        onClick={() => onCloseSession(activeSession.id)}
                         style={{ marginTop: 8 }}
                       >
                         Close
@@ -821,7 +821,7 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
                 </>
               )}
             </div>
-          ))}
+          )}
         </div>
           )}
         {sidePanel === 'presets' && (

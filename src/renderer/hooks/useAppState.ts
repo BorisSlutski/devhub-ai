@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { AppState, ProcessStatus, Project, SystemPortInfo } from '../../shared/types'
 
-export function useAppState() {
+type AppTabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access' | 'airflow'
+
+export function useAppState(activeTab: AppTabId = 'launchpad') {
   const [state, setState] = useState<AppState>({ projects: [], tags: [], scanPath: '' })
   const [statuses, setStatuses] = useState<Map<string, ProcessStatus>>(new Map())
   const [logs, setLogs] = useState<Map<string, string[]>>(new Map())
@@ -60,21 +62,29 @@ export function useAppState() {
       })
     })
 
-    // Refresh system ports every 10 seconds to detect externally started/stopped processes
-    const interval = setInterval(() => {
+    return () => {
+      unsubLog()
+      unsubStatus()
+    }
+  }, [])
+
+  // Refresh system ports only while Launchpad is active (avoids global polling)
+  useEffect(() => {
+    if (activeTab !== 'launchpad' || state.projects.length === 0) return
+
+    const tick = () => {
       const projects = stateRef.current.projects
+      if (projects.length === 0) return
       const ports = projects.map((p) => p.port).filter((p): p is number => p !== null)
       if (ports.length > 0) {
         window.api.detectSystemPorts(ports).then(setSystemPorts)
       }
-    }, 10000)
-
-    return () => {
-      unsubLog()
-      unsubStatus()
-      clearInterval(interval)
     }
-  }, [])
+
+    tick()
+    const interval = setInterval(tick, 10000)
+    return () => clearInterval(interval)
+  }, [activeTab, state.projects.length])
 
   const persist = useCallback((newState: AppState) => {
     setState(newState)

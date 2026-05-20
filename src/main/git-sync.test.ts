@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSafeRefName } from './git-sync'
+import { deriveSyncState, isSafeRefName } from './git-sync'
 
 describe('isSafeRefName', () => {
   it('accepts typical branch names', () => {
@@ -17,5 +17,15 @@ describe('isSafeRefName', () => {
     expect(isSafeRefName('../main')).toBe(false)
     expect(isSafeRefName('-bad')).toBe(false)
     expect(isSafeRefName('refs/heads/main.lock')).toBe(false)
+  })
+})
+
+describe('deriveSyncState', () => {
+  it('returns synced when up to date with remote', () => {
+    expect(deriveSyncState(true, true, 'main', 0, 0, 0)).toBe('synced')
+  })
+
+  it('returns dirty when uncommitted changes exist', () => {
+    expect(deriveSyncState(true, true, 'main', 0, 0, 2)).toBe('dirty')
   })
 })

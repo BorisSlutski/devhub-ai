@@ -3,7 +3,7 @@ import type {
   AppState, ProcessStatus, Project, WorkspaceFolder,
   AgentInfo, PipelineRun, PipelineConfig,
   EnhancerConfig, EnhanceResult, EnhancerSessionCost,
-  IpcResult, GitInfo, GitStatus, GitSyncStatus, GitPullResult, GitPullAllResult,
+  IpcResult, GitInfo, GitFolderMeta, GitStatus, GitSyncStatus, GitPullResult, GitPullAllResult,
   GitPullFinishedEvent, GitPullBatchFinishedEvent, GitPullStartResult,
   BranchList, WorktreeResult,
   PtyCreateOptions, PtyCreateResult, PtySessionInfo,
@@ -50,6 +50,8 @@ const api = {
   // Git
   getGitInfo: (folderPath: string): Promise<GitInfo> =>
     ipcRenderer.invoke('get-git-info', folderPath),
+  getFolderGitMeta: (folderPath: string, fetch?: boolean): Promise<GitFolderMeta> =>
+    ipcRenderer.invoke('get-folder-git-meta', folderPath, fetch ?? false),
   getGitStatus: (folderPath: string): Promise<GitStatus> =>
     ipcRenderer.invoke('get-git-status', folderPath),
   getGitSyncStatus: (folderPath: string, fetch?: boolean): Promise<GitSyncStatus> =>

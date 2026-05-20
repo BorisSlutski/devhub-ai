@@ -56,6 +56,9 @@ export interface GitSyncStatus {
   error?: string
 }
 
+/** Combined git branch/remote + sync status for Folders (single IPC). */
+export interface GitFolderMeta extends GitInfo, GitSyncStatus {}
+
 export interface GitPullResult extends IpcResult {
   branch?: string | null
   behind?: number

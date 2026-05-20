@@ -113,8 +113,7 @@ async function createWindow() {
 
   await startBrowserBridge()
 
-  // Start resource monitor and toggle idle mode on focus/blur
-  resourceMonitor.start(3000)
+  // Resource monitor polls only while a renderer client is subscribed (see resources handler)
   mainWindow.on('focus', () => resourceMonitor.setIdle(false))
   mainWindow.on('blur', () => resourceMonitor.setIdle(true))
 

@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from 'child_process'
-import type { GitSyncState, GitSyncStatus } from '../shared/ipc-types'
+import type { GitFolderMeta, GitSyncState, GitSyncStatus } from '../shared/ipc-types'
 
 /** Git ref names safe for argv (branch names from symbolic-ref / origin/HEAD). */
 export function isSafeRefName(ref: string): boolean {
@@ -64,6 +64,25 @@ export function hasOriginRemote(folderPath: string): boolean {
     return true
   } catch {
     return false
+  }
+}
+
+export function getOriginRemoteUrl(folderPath: string): string | null {
+  try {
+    const remote = execSync('git remote get-url origin', {
+      cwd: folderPath,
+      encoding: 'utf-8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    if (remote.includes('github.com')) {
+      return remote
+        .replace(/^git@github\.com:/, 'https://github.com/')
+        .replace(/\.git$/, '')
+    }
+    return remote
+  } catch {
+    return null
   }
 }
 
@@ -152,23 +171,27 @@ export function gitFetchOrigin(folderPath: string): void {
   })
 }
 
-export function buildGitSyncStatus(folderPath: string, fetch = false): GitSyncStatus {
-  const empty: GitSyncStatus = {
-    isGitRepo: false,
-    baseBranch: null,
-    currentBranch: null,
-    commitsBehind: 0,
-    commitsAhead: 0,
-    uncommitted: 0,
-    state: 'not-git',
-  }
+const emptyFolderMeta: GitFolderMeta = {
+  gitBranch: null,
+  gitRemote: null,
+  isGitRepo: false,
+  baseBranch: null,
+  currentBranch: null,
+  commitsBehind: 0,
+  commitsAhead: 0,
+  uncommitted: 0,
+  state: 'not-git',
+}
 
+export function buildGitFolderMeta(folderPath: string, fetch = false): GitFolderMeta {
   if (!isGitRepo(folderPath)) {
-    return empty
+    return { ...emptyFolderMeta }
   }
 
   const hasRemote = hasOriginRemote(folderPath)
   const currentBranch = getCurrentBranch(folderPath)
+  const gitBranch = currentBranch
+  const gitRemote = hasRemote ? getOriginRemoteUrl(folderPath) : null
   const baseBranch = resolveBaseBranch(folderPath)
 
   if (fetch && hasRemote) {
@@ -177,6 +200,8 @@ export function buildGitSyncStatus(folderPath: string, fetch = false): GitSyncSt
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       return {
+        gitBranch,
+        gitRemote,
         isGitRepo: true,
         baseBranch,
         currentBranch,
@@ -207,6 +232,8 @@ export function buildGitSyncStatus(folderPath: string, fetch = false): GitSyncSt
   )
 
   return {
+    gitBranch,
+    gitRemote,
     isGitRepo: true,
     baseBranch,
     currentBranch,
@@ -214,6 +241,20 @@ export function buildGitSyncStatus(folderPath: string, fetch = false): GitSyncSt
     commitsAhead,
     uncommitted,
     state,
+  }
+}
+
+export function buildGitSyncStatus(folderPath: string, fetch = false): GitSyncStatus {
+  const meta = buildGitFolderMeta(folderPath, fetch)
+  return {
+    isGitRepo: meta.isGitRepo,
+    baseBranch: meta.baseBranch,
+    currentBranch: meta.currentBranch,
+    commitsBehind: meta.commitsBehind,
+    commitsAhead: meta.commitsAhead,
+    uncommitted: meta.uncommitted,
+    state: meta.state,
+    error: meta.error,
   }
 }
 
