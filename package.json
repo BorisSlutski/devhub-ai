@@ -19,7 +19,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "npx playwright test",
-    "postinstall": "electron-rebuild -f -w node-pty"
+    "postinstall": "electron-rebuild -f -w node-pty && (test -f resources/icon.icns || npm run icons) && bash scripts/patch-electron-dev-icon.sh",
+    "patch-dev-icon": "bash scripts/patch-electron-dev-icon.sh"
   },
   "dependencies": {
     "@codemirror/lang-sql": "^6.10.0",

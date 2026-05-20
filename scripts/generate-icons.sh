@@ -19,10 +19,6 @@ fi
 echo "Generating icon.png (1024)..."
 rsvg-convert -w 1024 -h 1024 "$SVG" -o "$PROJECT_DIR/resources/icon.png"
 
-echo "Generating logo.jpeg (README hero)..."
-sips -s format jpeg "$PROJECT_DIR/resources/icon.png" \
-  --out "$PROJECT_DIR/resources/logo.jpeg" >/dev/null
-
 echo "Generating icon.iconset..."
 rm -rf "$ICONSET"
 mkdir -p "$ICONSET"
@@ -37,8 +33,11 @@ if ! iconutil -c icns "$ICONSET" -o "$PROJECT_DIR/resources/icon.icns"; then
   echo "iconutil failed — try: iconutil -c icns \"$ICONSET\" -o \"$PROJECT_DIR/resources/icon.icns\""
   exit 1
 fi
+rm -rf "$ICONSET"
+
+echo "Patching node_modules Electron.app for npm run dev..."
+bash "$PROJECT_DIR/scripts/patch-electron-dev-icon.sh"
 
 echo "Done:"
 echo "  resources/icon.png"
-echo "  resources/logo.jpeg"
 echo "  resources/icon.icns"

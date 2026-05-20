@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="resources/icon.png" width="160" alt="DevHub-AI app icon" />
-
-<img src="resources/logo.jpeg" width="520" alt="DevHub-AI" />
+<img src="resources/icon.png" width="200" alt="DevHub-AI" />
 
 # DevHub-AI
 
@@ -210,10 +208,19 @@ open /Applications/DevHub-AI.app
 
 | If you launch via… | Icon you see |
 |---|---|
-| `npm run dev` | Generic **Electron** icon (expected) |
+| `npm run dev` | Custom **DevHub-AI** icon (after `npm run icons` or `npm run patch-dev-icon`) |
 | `/Applications/DevHub-AI.app` | Custom **DevHub-AI** hub icon |
 
-Fix the installed app icon:
+Fix a stale **dev** icon (`npm run dev` still shows Electron):
+
+```bash
+npm run icons            # regenerates icon.icns and patches node_modules/electron
+# or: npm run patch-dev-icon
+# Quit any running Electron/DevHub-AI, then:
+npm run dev
+```
+
+Fix the **installed** app icon:
 
 ```bash
 npm run icons          # regenerate icon.icns from icon.svg
@@ -227,7 +234,7 @@ If Finder still shows the old icon, log out and back in (macOS caches app icons 
 **Regenerate app icon assets** (from `resources/icon.svg`):
 
 ```bash
-npm run icons    # writes icon.png, logo.jpeg, icon.icns
+npm run icons    # writes icon.png and icon.icns from icon.svg
 npm run package  # rebuild .app with new icon
 ```
 

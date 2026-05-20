@@ -2,7 +2,8 @@
 process.stdout?.on?.('error', () => {})
 process.stderr?.on?.('error', () => {})
 
-import { app, BrowserWindow, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
+import { applyMacDockIcon, resolveAppIconPath } from './app-icon'
 import { join } from 'path'
 import { processManager, getShellPath } from './process-manager'
 import { ptyManager } from './pty-manager'
@@ -46,8 +47,7 @@ import { resourceMonitor } from './resource-monitor'
 let mainWindow: BrowserWindow | null = null
 
 async function createWindow() {
-  const iconPng = join(__dirname, '../../resources/icon.png')
-  const iconIcns = join(__dirname, '../../resources/icon.icns')
+  const iconPng = resolveAppIconPath('png')
 
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -63,18 +63,6 @@ async function createWindow() {
       nodeIntegration: false
     }
   })
-
-  if (process.platform === 'darwin') {
-    try {
-      let icon = nativeImage.createFromPath(iconPng)
-      if (icon.isEmpty()) {
-        icon = nativeImage.createFromPath(iconIcns)
-      }
-      if (!icon.isEmpty()) {
-        app.dock.setIcon(icon)
-      }
-    } catch { /* ignore */ }
-  }
 
   processManager.setMainWindow(mainWindow)
   const shellPath = getShellPath()
@@ -190,6 +178,10 @@ function setupIPC() {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin') {
+    app.setName('DevHub-AI')
+    applyMacDockIcon()
+  }
   setupIPC()
   createWindow()
 

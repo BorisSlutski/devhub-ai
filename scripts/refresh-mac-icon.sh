@@ -29,6 +29,10 @@ cp "$ICNS" "$APP/Contents/Resources/electron.icns"
 touch "$APP"
 xattr -cr "$APP" 2>/dev/null || true
 
+# Bust macOS icon caches (Dock / Finder)
+rm -rf "$HOME/Library/Caches/com.apple.iconservices.store" 2>/dev/null || true
+rm -rf "$HOME/Library/Caches/com.apple.iconservices" 2>/dev/null || true
+
 # Register with Launch Services so `open -a DevHub-AI` works
 if [ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" ]; then
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
@@ -42,5 +46,5 @@ echo "Done. Launching DevHub-AI..."
 open "$APP"
 
 echo ""
-echo "Note: npm run dev uses the generic Electron icon — only the packaged app shows the custom icon."
+echo "Note: For npm run dev, run npm run patch-dev-icon if the Dock icon is still generic Electron."
 echo "If open fails, use: open /Applications/DevHub-AI.app"

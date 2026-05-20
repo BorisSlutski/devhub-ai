@@ -1,6 +1,9 @@
 node_modules/
 dist/
 out/
+
+# Generated icon intermediates (source of truth: resources/icon.svg)
+resources/icon.iconset/
 coverage/
 .DS_Store
 *.log
