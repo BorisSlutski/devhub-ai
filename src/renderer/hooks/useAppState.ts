@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { AppState, ProcessStatus, Project, SystemPortInfo } from '../../shared/types'
 
-type AppTabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access' | 'airflow'
+type AppTabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access'
 
 export function useAppState(activeTab: AppTabId = 'launchpad') {
   const [state, setState] = useState<AppState>({ projects: [], tags: [], scanPath: '' })

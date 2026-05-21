@@ -19,9 +19,15 @@ fi
 osascript -e 'quit app "DevHub-AI"' 2>/dev/null || true
 sleep 1
 
+PNG="$PROJECT_DIR/resources/icon.png"
 echo "Copying icon into app bundle..."
 cp "$ICNS" "$APP/Contents/Resources/DevHub-AI.icns"
 cp "$ICNS" "$APP/Contents/Resources/electron.icns"
+if [ -f "$PNG" ]; then
+  mkdir -p "$APP/Contents/Resources/app/resources"
+  cp "$PNG" "$APP/Contents/Resources/app/resources/icon.png"
+  cp "$ICNS" "$APP/Contents/Resources/app/resources/icon.icns"
+fi
 
 /usr/libexec/PlistBuddy -c 'Set :CFBundleIconFile DevHub-AI' "$APP/Contents/Info.plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c 'Add :CFBundleIconFile string DevHub-AI' "$APP/Contents/Info.plist"

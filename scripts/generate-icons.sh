@@ -6,8 +6,20 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PNG="$PROJECT_DIR/resources/icon.png"
 ICONSET="$PROJECT_DIR/resources/icon.iconset"
 
+SOURCE="$PROJECT_DIR/resources/icon-source.png"
+TRANSPARENT="$PROJECT_DIR/resources/.icon-transparent"
+if [ -f "$SOURCE" ]; then
+  if [ -f "$TRANSPARENT" ]; then
+    echo "Using transparent icon-source (no blue frame)..."
+    swift "$PROJECT_DIR/scripts/remove-icon-background.swift" "$SOURCE" "$PNG"
+  else
+    echo "Framing icon-source.png -> icon.png (Meeting Hub style border)..."
+    swift "$PROJECT_DIR/scripts/frame-app-icon.swift" "$SOURCE" "$PNG"
+  fi
+fi
+
 if [ ! -f "$PNG" ]; then
-  echo "Missing $PNG"
+  echo "Missing $PNG (or icon-source.png to generate it)"
   exit 1
 fi
 

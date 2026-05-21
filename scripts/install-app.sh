@@ -7,9 +7,12 @@ APP_NAME="DevHub-AI"
 SRC="$PROJECT_DIR/dist/$APP_NAME.app"
 DEST="/Applications/$APP_NAME.app"
 
+cd "$PROJECT_DIR"
+echo "Regenerating icon assets from resources/icon.png..."
+npm run icons
+
 if [ ! -d "$SRC" ]; then
   echo "dist/$APP_NAME.app not found — running npm run package first..."
-  cd "$PROJECT_DIR"
   npm run package
 fi
 

@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback, memo, useMemo, useRef } from 'react'
 import { WorkspaceFolder } from '../../shared/types'
-import type { GitFolderMeta, GitSyncStatus } from '../../shared/ipc-types'
+import type { GitFolderMeta, GitPullOptions, GitSyncStatus } from '../../shared/ipc-types'
 import { Skeleton } from './Skeleton'
+import { PullConfirmModal, type PullConfirmChoice } from './PullConfirmModal'
 import './FoldersView.css'
 
 interface Props {
@@ -57,15 +58,22 @@ function syncLabel(status: GitSyncStatus): string {
 }
 
 function syncTitle(status: GitSyncStatus): string {
-  if (status.state === 'error' && status.error) return status.error
   const base = status.baseBranch ? ` vs origin/${status.baseBranch}` : ''
+  if (status.error) {
+    const local = syncLabel(status)
+    return local && local !== 'error'
+      ? `Fetch failed: ${status.error} (${local} from last fetch${base})`
+      : `Fetch failed: ${status.error}`
+  }
   if (status.state === 'synced') return `Up to date with remote${base}`
   if (status.state === 'behind') return `${status.commitsBehind} commit(s) behind${base}`
   if (status.state === 'ahead') return `${status.commitsAhead} commit(s) ahead${base}`
   if (status.state === 'diverged') {
     return `${status.commitsBehind} behind, ${status.commitsAhead} ahead${base}`
   }
-  if (status.state === 'dirty') return `${status.uncommitted} uncommitted change(s)`
+  if (status.state === 'dirty') {
+    return `${status.uncommitted} tracked file(s) changed — commit or stash before pull`
+  }
   return syncLabel(status)
 }
 
@@ -169,17 +177,21 @@ const FolderRow = memo(function FolderRow({
             >
               {refreshing ? '…' : '↻'}
             </button>
-            {canPull && (
+            {canPull ? (
               <button
                 type="button"
                 className="btn btn-sm git-pull-btn"
                 onClick={onPull}
                 disabled={pulling || refreshing}
-                title={`Checkout ${syncStatus.baseBranch ?? 'main/master'} and pull`}
+                title={
+                  syncStatus.state === 'dirty'
+                    ? `${syncTitle(syncStatus)} — click to choose stash or discard`
+                    : `Checkout ${syncStatus.baseBranch ?? 'main/master'} and pull`
+                }
               >
                 {pulling ? '…' : 'Pull'}
               </button>
-            )}
+            ) : null}
           </div>
         )}
       </div>
@@ -283,6 +295,12 @@ export function FoldersView({
   const bulkPullPendingRef = useRef<Set<string> | null>(null)
   const [bulkRefreshing, setBulkRefreshing] = useState(false)
   const [bulkSummary, setBulkSummary] = useState<string | null>(null)
+  const [pullConfirm, setPullConfirm] = useState<{
+    path: string
+    name: string
+    baseBranch: string | null
+    changes: { tracked: string[]; untracked: string[] }
+  } | null>(null)
   const loadingPaths = useRef<Set<string>>(new Set())
   const tableWrapRef = useRef<HTMLDivElement>(null)
   const metaQueueRef = useRef<string[]>([])
@@ -441,11 +459,55 @@ export function FoldersView({
     }
   }, [finishPull])
 
-  const handlePullOne = useCallback((path: string) => {
+  const runPull = useCallback((path: string, options?: GitPullOptions) => {
     setPullingPaths((prev) => new Set(prev).add(path))
     setBulkSummary(null)
-    void window.api.startPullFolderToBase(path)
+    void window.api.startPullFolderToBase(path, options)
   }, [])
+
+  const handlePullOne = useCallback(
+    async (path: string, folderName: string) => {
+      const meta = metaMap.get(path)
+      if (!isPullable(meta)) return
+
+      try {
+        const changes = await window.api.getFolderWorkingTree(path)
+        const needsConfirm = changes.tracked.length > 0 || changes.untracked.length > 0
+        if (needsConfirm) {
+          setPullConfirm({
+            path,
+            name: folderName,
+            baseBranch: meta?.baseBranch ?? null,
+            changes,
+          })
+          return
+        }
+        runPull(path)
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        setBulkSummary(`${folderName}: ${msg}`)
+      }
+    },
+    [metaMap, runPull],
+  )
+
+  const handlePullConfirm = useCallback(
+    (choice: PullConfirmChoice) => {
+      if (!pullConfirm) return
+      const { path } = pullConfirm
+      setPullConfirm(null)
+      if (choice.action === 'cancel') return
+      const options: GitPullOptions | undefined =
+        choice.localChanges != null
+          ? {
+              localChanges: choice.localChanges,
+              stashUntracked: choice.stashUntracked,
+            }
+          : undefined
+      runPull(path, options)
+    },
+    [pullConfirm, runPull],
+  )
 
   const resolveGitPaths = useCallback(() => {
     return filtered
@@ -472,7 +534,7 @@ export function FoldersView({
     const confirmed = window.confirm(
       `Pull ${gitPaths.length} git folder(s)?\n\n` +
         'Each repo will checkout its main/master branch from origin and run git pull --ff-only. ' +
-        'Repos with uncommitted changes are skipped.',
+        'Repos with uncommitted tracked changes are skipped — use per-row Pull for those (stash or discard).',
     )
     if (!confirmed) return
 
@@ -624,12 +686,22 @@ export function FoldersView({
               syncStatus={metaMap.get(folder.path)}
               pulling={pullingPaths.has(folder.path)}
               refreshing={refreshingPaths.has(folder.path)}
-              onPull={() => handlePullOne(folder.path)}
+              onPull={() => void handlePullOne(folder.path, folder.name)}
               onRefresh={() => refreshOne(folder.path)}
             />
           ))}
         </div>
       </div>
+
+      {pullConfirm && (
+        <PullConfirmModal
+          folderName={pullConfirm.name}
+          baseBranch={pullConfirm.baseBranch}
+          changes={pullConfirm.changes}
+          onConfirm={handlePullConfirm}
+          onClose={() => setPullConfirm(null)}
+        />
+      )}
     </div>
   )
 }

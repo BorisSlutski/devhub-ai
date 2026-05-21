@@ -39,10 +39,11 @@ import {
   registerPresetHandlers,
   registerAkeylessHandlers,
   registerDbWorkbenchHandlers,
-  registerAirflowHandlers,
   registerSummaryHandlers,
 } from './handlers'
 import { resourceMonitor } from './resource-monitor'
+import { setDbIdleMainWindow } from './db-connection-idle'
+import { setAkeylessDbMainWindow } from './akeyless-db'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -77,6 +78,8 @@ async function createWindow() {
   pipelineManager.loadRuns()
   loadEnhancerConfig()
   setSessionMainWindow(mainWindow)
+  setDbIdleMainWindow(mainWindow)
+  setAkeylessDbMainWindow(mainWindow)
   workspaceInitTracker.setMainWindow(mainWindow)
   notificationManager.setMainWindow(mainWindow)
 
@@ -172,7 +175,6 @@ function setupIPC() {
   registerPresetHandlers()
   registerAkeylessHandlers()
   registerDbWorkbenchHandlers()
-  registerAirflowHandlers()
   registerSummaryHandlers()
 }
 

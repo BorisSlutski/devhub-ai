@@ -10,6 +10,7 @@
     "start": "electron-vite preview",
     "package": "bash scripts/package-mac.sh",
     "icons": "bash scripts/generate-icons.sh",
+    "frame-icon": "swift scripts/frame-app-icon.swift",
     "install-app": "bash scripts/install-app.sh",
     "refresh-icon": "bash scripts/refresh-mac-icon.sh",
     "verify-icon": "bash scripts/verify-mac-icon.sh",

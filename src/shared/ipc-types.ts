@@ -65,6 +65,21 @@ export interface GitPullResult extends IpcResult {
   ahead?: number
 }
 
+/** Tracked vs untracked paths from `git status --porcelain`. */
+export interface GitWorkingTreeChanges {
+  tracked: string[]
+  untracked: string[]
+}
+
+/** How to handle local changes before checkout + pull. */
+export type GitPullLocalChanges = 'stash' | 'discard'
+
+export interface GitPullOptions {
+  localChanges?: GitPullLocalChanges
+  /** When stashing, also include untracked files (`git stash -u`). */
+  stashUntracked?: boolean
+}
+
 export interface GitPullAllResult {
   path: string
   success: boolean
@@ -400,17 +415,6 @@ export interface PresetLaunchOptions {
 export interface PresetLaunchResult extends PtyCreateResult {
   preset?: SessionPreset
 }
-
-// ── Airflow (wix-astronomer-dags local Astro) ──
-
-export type {
-  AirflowConnection,
-  AirflowDag,
-  AirflowDagRun,
-  AirflowTaskInstance,
-  AirflowDiscoverResult,
-  AirflowHealthResult,
-} from './airflow-types'
 
 // ── Session summaries ──
 

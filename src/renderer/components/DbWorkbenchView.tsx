@@ -30,7 +30,11 @@ interface QueryResult {
   affectedRows: number
   executionTimeMs: number
   error?: string
+  rowCapApplied?: boolean
+  truncated?: boolean
 }
+
+const QUERY_CLIENT_TIMEOUT_MS = 95_000
 
 interface TableInfo {
   name: string
@@ -49,9 +53,12 @@ interface ColumnInfo {
   extra: string
 }
 
+const TABLES_FETCH_TIMEOUT_MS = 35_000
+
 interface DbSessionWorkspace {
   tables: TableInfo[]
   tablesLoading: boolean
+  tablesError: string | null
   expandedTable: string | null
   tableColumns: Record<string, ColumnInfo[]>
   columnsLoading: string | null
@@ -76,6 +83,7 @@ function createEmptyWorkspace(): DbSessionWorkspace {
   return {
     tables: [],
     tablesLoading: false,
+    tablesError: null,
     expandedTable: null,
     tableColumns: {},
     columnsLoading: null,
@@ -178,6 +186,8 @@ export function DbWorkbenchView() {
   const runQueryRef = useRef<(sqlOverride?: string) => void>(() => {})
   const editorViewRef = useRef<EditorView | null>(null)
   const connectPhaseTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
+  const queryElapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [queryElapsedSec, setQueryElapsedSec] = useState(0)
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeSessionId) ?? null,
@@ -190,6 +200,61 @@ export function DbWorkbenchView() {
       setActiveSessionId(sessions[sessions.length - 1].id)
     }
   }, [sessions, activeSessionId])
+
+  // Restore tabs when the view remounts (e.g. app restart) while main still holds tunnels.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const res = await window.api.dbListSessions()
+      if (cancelled || !res.success || !res.sessions?.length) return
+      setSessions((prev) => {
+        if (prev.length > 0) return prev
+        const restored = res.sessions!.map((s) =>
+          createSession({
+            connectionId: s.connectionId,
+            tunnelId: s.tunnelId,
+            cluster: s.cluster,
+            database: s.database,
+          }),
+        )
+        return restored
+      })
+      setActiveSessionId((prev) => prev ?? res.sessions![res.sessions!.length - 1].connectionId)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    const unsubIdle = window.api.onDbIdleDisconnected(({ connectionId }) => {
+      setSessions((prev) => {
+        const next = prev.filter((s) => s.connectionId !== connectionId)
+        setActiveSessionId((activeId) =>
+          activeId === connectionId ? (next[next.length - 1]?.id ?? null) : activeId,
+        )
+        return next
+      })
+      setConnectError('Connection closed after idle timeout (4 hours). Reconnect to continue.')
+    })
+    const unsubTunnel =
+      typeof window.api.onDbTunnelClosed === 'function'
+        ? window.api.onDbTunnelClosed(({ connectionId, reason }) => {
+            setSessions((prev) => {
+              const next = prev.filter((s) => s.connectionId !== connectionId)
+              setActiveSessionId((activeId) =>
+                activeId === connectionId ? (next[next.length - 1]?.id ?? null) : activeId,
+              )
+              return next
+            })
+            setConnectError(`${reason}. Reconnect to continue.`)
+          })
+        : () => {}
+    return () => {
+      unsubIdle()
+      unsubTunnel()
+    }
+  }, [])
 
   const patchSession = useCallback((sessionId: string, patch: Partial<DbSessionWorkspace>) => {
     setSessions((prev) =>
@@ -219,8 +284,25 @@ export function DbWorkbenchView() {
     return () => {
       for (const t of connectPhaseTimersRef.current) clearTimeout(t)
       connectPhaseTimersRef.current = []
+      if (queryElapsedTimerRef.current) clearInterval(queryElapsedTimerRef.current)
     }
   }, [])
+
+  const stopQueryElapsedTimer = useCallback(() => {
+    if (queryElapsedTimerRef.current) {
+      clearInterval(queryElapsedTimerRef.current)
+      queryElapsedTimerRef.current = null
+    }
+    setQueryElapsedSec(0)
+  }, [])
+
+  const startQueryElapsedTimer = useCallback(() => {
+    stopQueryElapsedTimer()
+    setQueryElapsedSec(0)
+    queryElapsedTimerRef.current = setInterval(() => {
+      setQueryElapsedSec((s) => s + 1)
+    }, 1000)
+  }, [stopQueryElapsedTimer])
 
   const patchActiveSession = useCallback(
     (patch: Partial<DbSessionWorkspace>) => {
@@ -232,29 +314,37 @@ export function DbWorkbenchView() {
 
   /* ── Producer Picker ── */
 
+  const loadProducers = useCallback(async (forceRefresh: boolean) => {
+    setProducersLoading(true)
+    setConnectError(null)
+    try {
+      const res = await window.api.dbListProducers('mysql', forceRefresh)
+      if (!res.success) {
+        setConnectError(res.error ?? 'Failed to load databases')
+        if (!forceRefresh && producers.length === 0) setProducers([])
+      } else {
+        setProducers(res.producers ?? [])
+        if (res.stale) {
+          setConnectError(
+            'Using cached database list (Akeyless gateway unavailable). Use Refresh list to retry.',
+          )
+        }
+      }
+    } catch (err) {
+      setConnectError(`Failed to load databases: ${err instanceof Error ? err.message : String(err)}`)
+      if (!forceRefresh && producers.length === 0) setProducers([])
+    } finally {
+      setProducersLoading(false)
+    }
+  }, [producers.length])
+
   const openPicker = useCallback(async () => {
     setShowPicker(true)
     setProducerSearch('')
     setPickerMode('cluster')
     setSelectedCluster(null)
-    setProducersLoading(true)
-    setConnectError(null)
-    try {
-      const res = await window.api.dbListProducers('mysql')
-      console.log('[DbWorkbench] dbListProducers response:', JSON.stringify({ success: res.success, count: res.producers?.length, error: res.error }))
-      if (!res.success) {
-        setConnectError(res.error ?? 'Failed to load databases')
-        setProducers([])
-      } else {
-        setProducers(res.producers ?? [])
-      }
-    } catch (err) {
-      setConnectError(`Failed to load databases: ${err instanceof Error ? err.message : String(err)}`)
-      setProducers([])
-    } finally {
-      setProducersLoading(false)
-    }
-  }, [])
+    await loadProducers(false)
+  }, [loadProducers])
 
   useEffect(() => {
     if (showPicker && searchInputRef.current) {
@@ -397,32 +487,53 @@ export function DbWorkbenchView() {
         const session = prev.find((s) => s.id === sessionId)
         connectionId = session?.connectionId ?? null
         return prev.map((s) =>
-          s.id === sessionId ? { ...s, workspace: { ...s.workspace, tablesLoading: true } } : s,
+          s.id === sessionId
+            ? {
+                ...s,
+                workspace: { ...s.workspace, tablesLoading: true, tablesError: null },
+              }
+            : s,
         )
       })
-      if (!connectionId) return
+      if (!connectionId) {
+        patchSession(sessionId, {
+          tablesLoading: false,
+          tablesError: 'No active connection for this tab',
+        })
+        return
+      }
 
-      try {
-        const res = await window.api.dbListTables(connectionId)
-        if (!res.success) {
-          const errMsg = `Error loading tables: ${res.error ?? 'Unknown error'}`
-          updateSessionWorkspace(sessionId, (ws) => ({
-            tables: [],
-            tablesLoading: false,
-            messages: [...ws.messages, errMsg],
-            activeResultTab: 'messages',
-          }))
-        } else {
-          patchSession(sessionId, { tables: res.tables ?? [], tablesLoading: false })
-        }
-      } catch (err) {
-        const errMsg = `Error loading tables: ${err instanceof Error ? err.message : String(err)}`
+      const failTables = (errMsg: string) => {
         updateSessionWorkspace(sessionId, (ws) => ({
           tables: [],
           tablesLoading: false,
+          tablesError: errMsg,
           messages: [...ws.messages, errMsg],
           activeResultTab: 'messages',
         }))
+      }
+
+      try {
+        const res = await Promise.race([
+          window.api.dbListTables(connectionId),
+          new Promise<{ success: false; tables: []; error: string }>((_, reject) => {
+            setTimeout(
+              () => reject(new Error(`Timed out after ${TABLES_FETCH_TIMEOUT_MS / 1000}s`)),
+              TABLES_FETCH_TIMEOUT_MS,
+            )
+          }),
+        ])
+        if (!res.success) {
+          failTables(res.error ?? 'Unknown error')
+        } else {
+          patchSession(sessionId, {
+            tables: res.tables ?? [],
+            tablesLoading: false,
+            tablesError: null,
+          })
+        }
+      } catch (err) {
+        failTables(err instanceof Error ? err.message : String(err))
       }
     },
     [patchSession, updateSessionWorkspace],
@@ -542,19 +653,48 @@ export function DbWorkbenchView() {
       })
       if (!connectionId || !sql) return
 
+      startQueryElapsedTimer()
       try {
-        const res = await window.api.dbExecuteQuery(connectionId, sql)
+        const res = await Promise.race([
+          window.api.dbExecuteQuery(connectionId, sql),
+          new Promise<QueryResult>((_, reject) => {
+            setTimeout(
+              () => reject(new Error(`Query timed out after ${QUERY_CLIENT_TIMEOUT_MS / 1000}s`)),
+              QUERY_CLIENT_TIMEOUT_MS,
+            )
+          }),
+        ])
+        stopQueryElapsedTimer()
         if (res.error) {
+          const msgs = [`Error: ${res.error}`]
+          if (/timed out|lost|closed|ECONNRESET/i.test(res.error)) {
+            msgs.push('Connection may be dead — disconnect and reconnect.')
+          }
           updateSessionWorkspace(activeSessionId, (w) => ({
             queryRunning: false,
             result: res,
-            messages: [...w.messages, `Error: ${res.error}`],
+            messages: [...w.messages, ...msgs],
             activeResultTab: 'messages',
           }))
+          if (/timed out|lost|closed|ECONNRESET/i.test(res.error)) {
+            setConnectError('Connection lost or query timed out. Reconnect to continue.')
+          }
         } else {
-          patchSession(activeSessionId, { queryRunning: false, result: res })
+          const notes: string[] = []
+          if (res.rowCapApplied) {
+            notes.push('Auto-added LIMIT 10001 (query had no LIMIT — avoids slow full table scans over SSH).')
+          }
+          if (res.truncated) {
+            notes.push(`Showing first 10,000 of ${res.rowCount}+ rows.`)
+          }
+          updateSessionWorkspace(activeSessionId, (w) => ({
+            queryRunning: false,
+            result: res,
+            messages: notes.length > 0 ? [...w.messages, ...notes] : w.messages,
+          }))
         }
       } catch (err) {
+        stopQueryElapsedTimer()
         const errMsg = err instanceof Error ? err.message : String(err)
         updateSessionWorkspace(activeSessionId, (w) => ({
           queryRunning: false,
@@ -564,12 +704,19 @@ export function DbWorkbenchView() {
         }))
 
         if (/ECONNRESET|EPIPE|lost|closed|timeout/i.test(errMsg)) {
-          setConnectError('Connection lost. Please reconnect.')
+          setConnectError('Connection lost or query timed out. Reconnect to continue.')
           void handleDisconnect(activeSessionId)
         }
       }
     },
-    [activeSessionId, patchSession, updateSessionWorkspace, handleDisconnect],
+    [
+      activeSessionId,
+      patchSession,
+      updateSessionWorkspace,
+      handleDisconnect,
+      startQueryElapsedTimer,
+      stopQueryElapsedTimer,
+    ],
   )
 
   runQueryRef.current = runQuery
@@ -703,8 +850,28 @@ export function DbWorkbenchView() {
             <div className="dbw-error-banner" style={{ margin: '0 0 8px' }}>
               <span className="dbw-error-icon">!</span>
               <span>{connectError}</span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={producersLoading}
+                onClick={() => void loadProducers(true)}
+              >
+                Retry
+              </button>
             </div>
           )}
+
+          <div className="dbw-picker-toolbar">
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={producersLoading}
+              onClick={() => void loadProducers(true)}
+              title="Fetch latest list from Akeyless (can be slow)"
+            >
+              Refresh list
+            </button>
+          </div>
 
           <div className="dbw-picker-list">
             {producersLoading ? (
@@ -971,15 +1138,30 @@ export function DbWorkbenchView() {
           <div className="dbw-sidebar-header">
             <span className="dbw-sidebar-title">{activeSession?.database ?? ''}</span>
             <span className="dbw-sidebar-count">
-              {ws?.tables.length ?? 0} table{(ws?.tables.length ?? 0) !== 1 ? 's' : ''}
+              {ws?.tablesLoading && (ws?.tables.length ?? 0) > 0
+                ? 'Refreshing…'
+                : `${ws?.tables.length ?? 0} table${(ws?.tables.length ?? 0) !== 1 ? 's' : ''}`}
             </span>
           </div>
 
           <div className="dbw-sidebar-list">
-            {ws?.tablesLoading ? (
+            {ws?.tablesError ? (
+              <div className="dbw-sidebar-error">
+                <div>{ws.tablesError}</div>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => activeSessionId && void fetchTables(activeSessionId)}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : ws?.tablesLoading && (ws?.tables.length ?? 0) === 0 ? (
               <div className="dbw-sidebar-loading">Loading tables...</div>
             ) : (ws?.tables.length ?? 0) === 0 ? (
-              <div className="dbw-sidebar-empty">No tables found</div>
+              <div className="dbw-sidebar-empty">
+                {ws?.tablesLoading ? 'Loading tables...' : 'No tables found'}
+              </div>
             ) : (
               ws!.tables.map((t) => {
                 const isExpanded = ws!.expandedTable === t.name
@@ -1116,7 +1298,13 @@ export function DbWorkbenchView() {
                 ws.queryRunning ? (
                   <div className="dbw-results-loading">
                     <div className="dbw-connecting-spinner dbw-spinner-sm" />
-                    <span>Executing query...</span>
+                    <span>
+                      Executing query
+                      {queryElapsedSec > 0 ? ` (${queryElapsedSec}s)` : '…'}
+                    </span>
+                    <span className="dbw-results-loading-hint">
+                      Over SSH tunnels large scans can take up to 90s. Add LIMIT for faster results.
+                    </span>
                   </div>
                 ) : ws.result?.error ? (
                   <div className="dbw-results-error">

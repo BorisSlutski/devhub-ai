@@ -5,6 +5,7 @@ import type {
   EnhancerConfig, EnhanceResult, EnhancerSessionCost,
   IpcResult, GitInfo, GitFolderMeta, GitStatus, GitSyncStatus, GitPullResult, GitPullAllResult,
   GitPullFinishedEvent, GitPullBatchFinishedEvent, GitPullStartResult,
+  GitWorkingTreeChanges, GitPullOptions,
   BranchList, WorktreeResult,
   PtyCreateOptions, PtyCreateResult, PtySessionInfo,
   DirectoryEntry, FileContent, FileSearchResult, FileSearchEntry, DiffResult,
@@ -15,7 +16,6 @@ import type {
   InitProgress, NotificationSettings,
   SessionPreset, SessionPresetCreate, PresetLaunchOptions, PresetLaunchResult,
   SessionSummary, SaveSummaryOptions,
-  AirflowDiscoverResult, AirflowHealthResult, AirflowDag, AirflowDagRun, AirflowTaskInstance,
 } from '../shared/ipc-types'
 
 const api = {
@@ -56,12 +56,17 @@ const api = {
     ipcRenderer.invoke('get-git-status', folderPath),
   getGitSyncStatus: (folderPath: string, fetch?: boolean): Promise<GitSyncStatus> =>
     ipcRenderer.invoke('get-git-sync-status', folderPath, fetch ?? false),
-  pullFolderToBase: (folderPath: string): Promise<GitPullResult> =>
-    ipcRenderer.invoke('pull-folder-to-base', folderPath),
+  getFolderWorkingTree: (folderPath: string): Promise<GitWorkingTreeChanges> =>
+    ipcRenderer.invoke('get-folder-working-tree', folderPath),
+  pullFolderToBase: (folderPath: string, options?: GitPullOptions): Promise<GitPullResult> =>
+    ipcRenderer.invoke('pull-folder-to-base', folderPath, options),
   pullAllFoldersToBase: (folderPaths: string[]): Promise<GitPullAllResult[]> =>
     ipcRenderer.invoke('pull-all-folders-to-base', folderPaths),
-  startPullFolderToBase: (folderPath: string): Promise<GitPullStartResult> =>
-    ipcRenderer.invoke('start-pull-folder-to-base', folderPath),
+  startPullFolderToBase: (
+    folderPath: string,
+    options?: GitPullOptions,
+  ): Promise<GitPullStartResult> =>
+    ipcRenderer.invoke('start-pull-folder-to-base', folderPath, options),
   startPullAllFoldersToBase: (folderPaths: string[]): Promise<GitPullStartResult> =>
     ipcRenderer.invoke('start-pull-all-folders-to-base', folderPaths),
   onGitPullFinished: (callback: (event: GitPullFinishedEvent) => void) => {
@@ -370,9 +375,12 @@ const api = {
     ipcRenderer.invoke('akeyless-update-cli'),
 
   // DB Workbench
-  dbListProducers: (type?: 'mysql' | 'mongo'): Promise<{
-    success: boolean; producers: any[]; error?: string;
-  }> => ipcRenderer.invoke('db-list-producers', type),
+  dbListProducers: (
+    type?: 'mysql' | 'mongo',
+    forceRefresh?: boolean,
+  ): Promise<{
+    success: boolean; producers: any[]; error?: string; stale?: boolean;
+  }> => ipcRenderer.invoke('db-list-producers', type, forceRefresh),
   dbConnect: (producerName: string): Promise<{
     success: boolean; connectionId?: string; tunnelId?: string;
     cluster?: string; database?: string; type?: string; error?: string;
@@ -384,6 +392,22 @@ const api = {
     connections: { id: string; host: string; port: number; user: string; database: string; connected: boolean }[]
     error?: string
   }> => ipcRenderer.invoke('db-list-connections'),
+  dbListSessions: (): Promise<{
+    success: boolean
+    sessions: { connectionId: string; tunnelId: string; cluster: string; database: string; producerName: string }[]
+    error?: string
+  }> => ipcRenderer.invoke('db-list-sessions'),
+  onDbIdleDisconnected: (callback: (payload: { connectionId: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { connectionId: string }) => callback(payload)
+    ipcRenderer.on('db-idle-disconnected', handler)
+    return () => ipcRenderer.removeListener('db-idle-disconnected', handler)
+  },
+  onDbTunnelClosed: (callback: (payload: { connectionId: string; reason: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { connectionId: string; reason: string }) =>
+      callback(payload)
+    ipcRenderer.on('db-tunnel-closed', handler)
+    return () => ipcRenderer.removeListener('db-tunnel-closed', handler)
+  },
   dbExecuteQuery: (connectionId: string, sql: string): Promise<{
     columns: any[]; rows: any[][]; rowCount: number;
     affectedRows: number; executionTimeMs: number; error?: string;
@@ -397,41 +421,6 @@ const api = {
   dbListDatabases: (connectionId: string): Promise<{
     success: boolean; databases: string[]; error?: string;
   }> => ipcRenderer.invoke('db-list-databases', connectionId),
-
-  // Airflow (wix-astronomer-dags local Astro)
-  airflowDiscover: (scanPath: string): Promise<AirflowDiscoverResult> =>
-    ipcRenderer.invoke('airflow-discover', scanPath),
-  airflowHealth: (repoRoot: string): Promise<AirflowHealthResult> =>
-    ipcRenderer.invoke('airflow-health', repoRoot),
-  airflowListDags: (repoRoot: string): Promise<{ success: boolean; dags: AirflowDag[]; error?: string }> =>
-    ipcRenderer.invoke('airflow-list-dags', repoRoot),
-  airflowPatchDag: (repoRoot: string, dagId: string, isPaused: boolean): Promise<IpcResult> =>
-    ipcRenderer.invoke('airflow-patch-dag', repoRoot, dagId, isPaused),
-  airflowTriggerDag: (
-    repoRoot: string,
-    dagId: string,
-    confJson?: string,
-  ): Promise<IpcResult & { dagRunId?: string }> =>
-    ipcRenderer.invoke('airflow-trigger-dag', repoRoot, dagId, confJson),
-  airflowListDagRuns: (
-    repoRoot: string,
-    dagId: string,
-  ): Promise<{ success: boolean; runs: AirflowDagRun[]; error?: string }> =>
-    ipcRenderer.invoke('airflow-list-dag-runs', repoRoot, dagId),
-  airflowListTaskInstances: (
-    repoRoot: string,
-    dagId: string,
-    dagRunId: string,
-  ): Promise<{ success: boolean; tasks: AirflowTaskInstance[]; error?: string }> =>
-    ipcRenderer.invoke('airflow-list-task-instances', repoRoot, dagId, dagRunId),
-  airflowGetTaskLog: (
-    repoRoot: string,
-    dagId: string,
-    dagRunId: string,
-    taskId: string,
-    tryNumber?: number,
-  ): Promise<{ success: boolean; log: string; error?: string }> =>
-    ipcRenderer.invoke('airflow-get-task-log', repoRoot, dagId, dagRunId, taskId, tryNumber),
 }
 
 contextBridge.exposeInMainWorld('api', api)

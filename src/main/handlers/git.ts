@@ -6,7 +6,13 @@ import { execSync, exec } from 'child_process'
 import { promisify } from 'util'
 import { homedir } from 'os'
 import { WorkspaceFolder } from '../../shared/types'
-import { buildGitFolderMeta, buildGitSyncStatus, pullFolderToBase } from '../git-sync'
+import {
+  buildGitFolderMeta,
+  buildGitSyncStatus,
+  getWorkingTreeChanges,
+  pullFolderToBase,
+  type PullFolderOptions,
+} from '../git-sync'
 import { getCachedFolderMeta, setCachedFolderMeta, invalidateFolderMeta } from '../git-meta-cache'
 
 const execAsync = promisify(exec)
@@ -190,9 +196,16 @@ export function registerGitHandlers() {
     return buildGitSyncStatus(folderPath, fetch)
   })
 
-  ipcMain.handle('pull-folder-to-base', async (_event, folderPath: string) => {
-    return pullFolderToBase(folderPath)
+  ipcMain.handle('get-folder-working-tree', async (_event, folderPath: string) => {
+    return getWorkingTreeChanges(folderPath)
   })
+
+  ipcMain.handle(
+    'pull-folder-to-base',
+    async (_event, folderPath: string, options?: PullFolderOptions) => {
+      return pullFolderToBase(folderPath, options)
+    },
+  )
 
   ipcMain.handle('pull-all-folders-to-base', async (_event, folderPaths: string[]) => {
     const results: Array<{
@@ -233,10 +246,12 @@ export function registerGitHandlers() {
     }
   }
 
-  ipcMain.handle('start-pull-folder-to-base', (event, folderPath: string) => {
+  ipcMain.handle(
+    'start-pull-folder-to-base',
+    (event, folderPath: string, options?: PullFolderOptions) => {
     const sender = event.sender
     void (async () => {
-      const result = await pullFolderToBase(folderPath)
+      const result = await pullFolderToBase(folderPath, options)
       emitPullFinished(sender, {
         path: folderPath,
         success: result.success,

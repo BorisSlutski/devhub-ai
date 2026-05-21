@@ -30,14 +30,12 @@ export function resolveAppIconPath(prefer: 'png' | 'icns' = 'png'): string {
   return join(dir, 'icon.png')
 }
 
-/** macOS Dock icon (dev + packaged). Process icon in dev comes from patch-electron-dev-icon.sh. */
+/** macOS Dock icon (dev + packaged). Prefer .icns — bundled icon.png in .app can be stale after icon refresh. */
 export function applyMacDockIcon(): void {
   if (process.platform !== 'darwin' || !app.dock) return
 
-  const pngPath = resolveAppIconPath('png')
-  const icnsPath = resolveAppIconPath('icns')
-
-  for (const path of [pngPath, icnsPath]) {
+  for (const prefer of ['icns', 'png'] as const) {
+    const path = resolveAppIconPath(prefer)
     if (!existsSync(path)) continue
     const image = nativeImage.createFromPath(path)
     if (!image.isEmpty()) {

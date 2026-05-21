@@ -14,6 +14,9 @@ npx electron-rebuild -f -w node-pty
 echo "Building $APP_NAME..."
 npx electron-vite build
 
+echo "Regenerating icon.icns from resources/icon.png..."
+npm run icons
+
 echo "Packaging $APP_NAME.app..."
 rm -rf "$APP_DIR"
 mkdir -p "$DIST_DIR"

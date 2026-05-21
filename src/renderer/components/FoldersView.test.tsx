@@ -144,6 +144,39 @@ describe('FoldersView', () => {
     expect(screen.queryByText('other-repo')).not.toBeInTheDocument()
   })
 
+  it('shows pull confirm modal when tracked files block pull', async () => {
+    const user = userEvent.setup()
+    vi.mocked(window.api.getFolderGitMeta).mockResolvedValue({
+      gitBranch: 'master',
+      gitRemote: 'https://github.com/org/my-repo',
+      isGitRepo: true,
+      baseBranch: 'master',
+      currentBranch: 'master',
+      commitsBehind: 68,
+      commitsAhead: 0,
+      uncommitted: 1,
+      state: 'dirty',
+    })
+    vi.mocked(window.api.getFolderWorkingTree).mockResolvedValue({
+      tracked: ['CLAUDE.md'],
+      untracked: [],
+    })
+
+    render(<FoldersView scanPath="/tmp" />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pull' })).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Pull' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByText(/CLAUDE.md/)).toBeInTheDocument()
+    })
+    expect(window.api.startPullFolderToBase).not.toHaveBeenCalled()
+  })
+
   it('per-row refresh fetches git sync status', async () => {
     const user = userEvent.setup()
     render(<FoldersView scanPath="/tmp" />)

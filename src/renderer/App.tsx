@@ -17,13 +17,12 @@ import { SetupWizard } from './components/SetupWizard'
 import { Toast } from './components/Toast'
 import { AgentsView } from './components/AgentsView'
 import { DbWorkbenchView } from './components/DbWorkbenchView'
-import { AirflowView } from './components/AirflowView'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Skeleton } from './components/Skeleton'
 import { Project } from '../shared/types'
 import appIcon from '../../resources/icon.png'
 
-type TabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access' | 'airflow'
+type TabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access'
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>('launchpad')
@@ -60,7 +59,7 @@ export function App() {
   useEffect(() => {
     if (!loaded || hydratedRef.current) return
     hydratedRef.current = true
-    if (state.activeTab) setActiveTab(state.activeTab)
+    if (state.activeTab && (state.activeTab as string) !== 'airflow') setActiveTab(state.activeTab)
     if (state.selectedProjectId) setSelectedProjectId(state.selectedProjectId)
   }, [loaded, state.activeTab, state.selectedProjectId])
 
@@ -508,45 +507,22 @@ export function App() {
         >
           DB Access
         </div>
-        <div
-          className={`tab ${activeTab === 'airflow' ? 'active' : ''}`}
-          onClick={() => setActiveTab('airflow')}
-        >
-          Airflow
-        </div>
       </div>
 
-      {activeTab === 'db-access' && (
-        <div
-          style={{
-            display: 'flex',
-            flex: 1,
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          <ErrorBoundary name="DB Access">
-            <DbWorkbenchView />
-          </ErrorBoundary>
-        </div>
-      )}
+      <div
+        style={{
+          display: activeTab === 'db-access' ? 'flex' : 'none',
+          flex: 1,
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <ErrorBoundary name="DB Access">
+          <DbWorkbenchView />
+        </ErrorBoundary>
+      </div>
 
-      {activeTab === 'airflow' && (
-        <div
-          style={{
-            display: 'flex',
-            flex: 1,
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          <ErrorBoundary name="Airflow">
-            <AirflowView scanPath={state.scanPath} />
-          </ErrorBoundary>
-        </div>
-      )}
-
-      {activeTab === 'db-access' || activeTab === 'airflow' ? null : activeTab === 'agents' ? (
+      {activeTab === 'db-access' ? null : activeTab === 'agents' ? (
         <ErrorBoundary name="Agents">
           <AgentsView />
         </ErrorBoundary>

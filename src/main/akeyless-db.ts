@@ -1,7 +1,9 @@
 import { execFile, spawn, ChildProcess } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import type { BrowserWindow } from 'electron'
+import { mysqlClient } from './mysql-client'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,6 +34,8 @@ export interface TunnelInfo {
   type: 'mysql' | 'mongo'
   process: ChildProcess | null
   connected: boolean
+  /** Set when we intentionally kill the tunnel (avoid duplicate close notifications). */
+  closing?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -47,6 +51,13 @@ const SSH_BASTION = 'ssh.prod-access.wewix.net:22'
 const CLI_TIMEOUT = 120_000
 const PORT_RANGE_MIN = 2000
 const PORT_RANGE_MAX = 2050
+/** In-memory cache — avoids hammering the gateway when reopening the picker. */
+const PRODUCERS_CACHE_TTL_MS = 10 * 60 * 1000
+/** Disk cache kept longer for gateway outage fallback. */
+const PRODUCERS_DISK_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const PRODUCERS_DISK_CACHE_FILE = join(homedir(), '.devhub-ai', 'db-producers-cache.json')
+const MAX_CLI_RETRIES = 4
+const CLI_RETRY_DELAYS_MS = [0, 800, 1600, 3200, 6400]
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -54,7 +65,30 @@ const PORT_RANGE_MAX = 2050
 
 const activeTunnels = new Map<string, TunnelInfo>()
 const producerDetailsCache = new Map<string, { host: string; dbName: string }>()
+let producersListCache: { at: number; producers: DbProducer[] } | null = null
 let resolvedBinaryPath: string | null = null
+let mainWindowRef: BrowserWindow | null = null
+let cliQueue: Promise<void> = Promise.resolve()
+
+export function setAkeylessDbMainWindow(win: BrowserWindow | null): void {
+  mainWindowRef = win
+}
+
+function enqueueCli<T>(fn: () => Promise<T>): Promise<T> {
+  const run = cliQueue.then(fn, fn)
+  cliQueue = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
+function notifyTunnelClosed(tunnelId: string, reason: string): void {
+  const win = mainWindowRef
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('db-tunnel-closed', { connectionId: tunnelId, reason })
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -101,14 +135,7 @@ function envWithoutGateway(): NodeJS.ProcessEnv {
   return env
 }
 
-/**
- * Runs an akeyless CLI command via `execFile` and resolves with stdout.
- * Rejects on non-zero exit, timeout, or stderr-only output.
- * Retries up to {@link MAX_RETRIES} times on transient errors (e.g. unexpected EOF).
- */
-const MAX_RETRIES = 2
-
-function runAkeylessCommand(args: string[], retries: number = MAX_RETRIES): Promise<string> {
+function execAkeylessOnce(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const bin = findAkeylessBinary()
     execFile(
@@ -117,19 +144,44 @@ function runAkeylessCommand(args: string[], retries: number = MAX_RETRIES): Prom
       { timeout: CLI_TIMEOUT, env: envWithGateway(), maxBuffer: 10 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
-          const msg = stderr || err.message
-          const isTransient = /unexpected EOF|read body failed|connection reset/i.test(msg)
-          if (isTransient && retries > 0) {
-            console.warn(`[akeyless-db] transient error for '${args[0]}', retrying (${retries} left): ${msg}`)
-            resolve(runAkeylessCommand(args, retries - 1))
-            return
-          }
-          reject(new Error(`akeyless ${args[0]} failed: ${msg}`))
+          reject(new Error(stderr || err.message))
           return
         }
         resolve(stdout)
       },
     )
+  })
+}
+
+/**
+ * Runs an akeyless CLI command via `execFile`. Serialized through a queue so
+ * list-items does not run concurrently with connect/credential calls (can
+ * disrupt active SSH tunnels). Retries transient gateway errors with backoff.
+ */
+function runAkeylessCommand(args: string[]): Promise<string> {
+  return enqueueCli(async () => {
+    let lastErr: Error | null = null
+    for (let attempt = 0; attempt <= MAX_CLI_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = CLI_RETRY_DELAYS_MS[attempt] ?? 6400
+        await new Promise((r) => setTimeout(r, delay))
+      }
+      try {
+        return await execAkeylessOnce(args)
+      } catch (err: any) {
+        const msg = err?.message ?? String(err)
+        lastErr = new Error(msg)
+        const isTransient = isTransientCliError(msg)
+        if (isTransient && attempt < MAX_CLI_RETRIES) {
+          console.warn(
+            `[akeyless-db] transient error for '${args[0]}', retry ${attempt + 1}/${MAX_CLI_RETRIES}: ${msg}`,
+          )
+          continue
+        }
+        throw new Error(`akeyless ${args[0]} failed: ${msg}`)
+      }
+    }
+    throw new Error(`akeyless ${args[0]} failed: ${lastErr?.message ?? 'unknown error'}`)
   })
 }
 
@@ -142,21 +194,191 @@ function typeFromPath(name: string): 'mysql' | 'mongo' {
 }
 
 /**
- * Parses a producer path into cluster and database segments.
- * Path format: /prod/dba/developer-access/<type>/<kgb-id>/<cluster>/<database>
- *   segments:   1    2    3                4      5        6         7
- * Using 1-based indexing on split('/') where index 0 is empty string.
- * The shell script uses `cut -d '/' -f7` (cluster) and `-f8` (database).
- * split('/') on "/a/b/c/d/e/f/g" gives ["","a","b","c","d","e","f","g"]
- *   indices:                               0   1   2   3   4   5   6  7
- * So f7 in cut = index 6, f8 = index 7.
+ * Parses a producer path for picker display.
+ * Path: /prod/dba/developer-access/mysql/<kgb-id>/.../pdb-mysql-host.42-db_name
  */
-function parseProducerPath(name: string): { cluster: string; database: string } {
-  const segments = name.split('/')
-  return {
-    cluster: segments[6] ?? '',
-    database: segments[7] ?? '',
+function parseProducerPath(name: string): { cluster: string; database: string; dbName: string } {
+  const parts = name.split('/').filter(Boolean)
+  const typeIdx = parts.findIndex((p) => p === 'mysql' || p === 'mongo')
+  const cluster = typeIdx >= 0 ? (parts[typeIdx + 1] ?? '') : ''
+  const leaf = parts[parts.length - 1] ?? ''
+  const dbName = dbNameFromLeaf(leaf)
+  return { cluster, database: leaf, dbName }
+}
+
+/** e.g. pdb-mysql-billing0a.42-wix_billing → wix_billing */
+function dbNameFromLeaf(leaf: string): string {
+  const dotted = leaf.match(/\.[\da-z.]+-(.+)$/i)
+  if (dotted) return dotted[1]
+  const dashed = leaf.match(/-([a-z0-9_]+)$/i)
+  return dashed ? dashed[1] : leaf
+}
+
+function isTransientCliError(msg: string): boolean {
+  return /unexpected EOF|read body failed|connection reset|ECONNRESET|ETIMEDOUT|socket hang up/i.test(
+    msg,
+  )
+}
+
+function readDiskProducersCache(): { at: number; producers: DbProducer[] } | null {
+  try {
+    if (!existsSync(PRODUCERS_DISK_CACHE_FILE)) return null
+    const raw = readFileSync(PRODUCERS_DISK_CACHE_FILE, 'utf-8')
+    const parsed = JSON.parse(raw) as { at?: number; producers?: DbProducer[] }
+    if (!parsed.at || !Array.isArray(parsed.producers) || parsed.producers.length === 0) return null
+    return { at: parsed.at, producers: parsed.producers }
+  } catch {
+    return null
   }
+}
+
+function writeDiskProducersCache(producers: DbProducer[]): void {
+  try {
+    const dir = join(homedir(), '.devhub-ai')
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      PRODUCERS_DISK_CACHE_FILE,
+      JSON.stringify({ at: Date.now(), producers }),
+      'utf-8',
+    )
+  } catch (err: any) {
+    console.warn('[akeyless-db] failed to write disk cache:', err.message)
+  }
+}
+
+function parseListItemsToProducers(stdout: string, dbType: 'mysql' | 'mongo'): DbProducer[] {
+  const results: DbProducer[] = []
+  let parsed: any
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    const lines = stdout.split('\n')
+    for (const line of lines) {
+      const match = line.match(/"item_name"\s*:\s*"([^"]+)"/)
+      if (!match) continue
+      const name = match[1]
+      const { cluster, database, dbName } = parseProducerPath(name)
+      results.push({ name, cluster, database, dbName, type: dbType })
+    }
+    return results
+  }
+
+  const items: any[] = parsed?.items ?? (Array.isArray(parsed) ? parsed : [])
+  for (const item of items) {
+    const name: string = item.item_name ?? item.name ?? ''
+    if (!name) continue
+    const { cluster, database, dbName } = parseProducerPath(name)
+    const sra = item?.item_general_info?.secure_remote_access_details
+    const resolvedDbName: string = sra?.db_name ?? dbName
+    results.push({
+      name,
+      cluster,
+      database,
+      dbName: resolvedDbName,
+      type: dbType,
+    })
+    if (sra) {
+      const hostRaw = sra.host
+      const host: string = Array.isArray(hostRaw) ? hostRaw[0] : String(hostRaw ?? '')
+      if (host) {
+        producerDetailsCache.set(name, { host, dbName: resolvedDbName })
+      }
+    }
+  }
+  return results
+}
+
+/** Small paginated folder listing under a producer root (mysql/mongo). */
+async function listKgbFolderPaths(rootPath: string): Promise<string[]> {
+  const folders: string[] = []
+  let token: string | undefined
+  for (;;) {
+    const args = [
+      'list-items',
+      '--path',
+      rootPath,
+      '--current-folder',
+      '--profile',
+      AKEYLESS_PROFILE,
+      '--json',
+    ]
+    if (token) args.push('--pagination-token', token)
+    const stdout = await runAkeylessCommand(args)
+    const parsed = JSON.parse(stdout)
+    for (const f of parsed.folders ?? []) {
+      folders.push(String(f).replace(/\/$/, ''))
+    }
+    token = parsed.next_page
+    if (!token) break
+  }
+  return folders
+}
+
+/** list-items for one filter prefix — minimal JSON payload. */
+async function listItemsForFilter(filterPath: string, dbType: 'mysql' | 'mongo'): Promise<DbProducer[]> {
+  const stdout = await runAkeylessCommand([
+    'list-items',
+    '--filter',
+    filterPath,
+    '--type',
+    'dynamic-secret',
+    '--profile',
+    AKEYLESS_PROFILE,
+    '--json',
+    '--minimal-view',
+    '--auto-pagination=enabled',
+  ])
+  return parseListItemsToProducers(stdout, dbType)
+}
+
+/**
+ * Loads producers for a root path. Tries one bulk request first; on EOF falls back
+ * to per-kgb-folder requests (much smaller responses, far less likely to truncate).
+ */
+async function listProducersForRoot(rootPath: string, dbType: 'mysql' | 'mongo'): Promise<DbProducer[]> {
+  try {
+    return await listItemsForFilter(rootPath, dbType)
+  } catch (bulkErr: any) {
+    const msg = bulkErr?.message ?? String(bulkErr)
+    if (!isTransientCliError(msg)) throw bulkErr
+    console.warn(`[akeyless-db] bulk list-items failed for ${rootPath}, using per-kgb chunks:`, msg)
+  }
+
+  const folders = await listKgbFolderPaths(rootPath)
+  if (folders.length === 0) {
+    throw new Error(`No producer folders found under ${rootPath}`)
+  }
+
+  const results: DbProducer[] = []
+  const seen = new Set<string>()
+  const chunkErrors: string[] = []
+
+  for (const folder of folders) {
+    try {
+      const chunk = await listItemsForFilter(folder, dbType)
+      for (const p of chunk) {
+        if (seen.has(p.name)) continue
+        seen.add(p.name)
+        results.push(p)
+      }
+    } catch (err: any) {
+      chunkErrors.push(`${folder}: ${err.message}`)
+      console.error(`[akeyless-db] list-items chunk failed for ${folder}:`, err.message)
+    }
+  }
+
+  if (results.length === 0) {
+    throw new Error(
+      chunkErrors.length > 0
+        ? `Failed to load producers: ${chunkErrors.slice(0, 3).join('; ')}`
+        : `No producers found under ${rootPath}`,
+    )
+  }
+
+  console.log(
+    `[akeyless-db] loaded ${results.length} producers from ${folders.length} kgb folders under ${rootPath}`,
+  )
+  return results
 }
 
 /**
@@ -190,83 +412,75 @@ function generateTunnelId(): string {
  * Lists akeyless dynamic-secret producers for the given database type(s).
  * When `type` is omitted, both mysql and mongo producers are returned.
  */
-export async function listProducers(type?: 'mysql' | 'mongo'): Promise<DbProducer[]> {
-  const paths: string[] = []
-  if (!type || type === 'mysql') paths.push(MYSQL_PRODUCER_PATH)
-  if (!type || type === 'mongo') paths.push(MONGO_PRODUCER_PATH)
+export interface ListProducersResult {
+  producers: DbProducer[]
+  stale?: boolean
+}
+
+export function clearProducersCache(): void {
+  producersListCache = null
+}
+
+function filterByType(producers: DbProducer[], type?: 'mysql' | 'mongo'): DbProducer[] {
+  if (!type) return producers
+  return producers.filter((p) => p.type === type)
+}
+
+export async function listProducers(
+  type?: 'mysql' | 'mongo',
+  options?: { forceRefresh?: boolean },
+): Promise<ListProducersResult> {
+  const now = Date.now()
+  if (
+    !options?.forceRefresh &&
+    producersListCache &&
+    now - producersListCache.at < PRODUCERS_CACHE_TTL_MS
+  ) {
+    return { producers: filterByType(producersListCache.producers, type) }
+  }
+
+  const diskCache = !options?.forceRefresh ? readDiskProducersCache() : null
+
+  const roots: Array<{ path: string; dbType: 'mysql' | 'mongo' }> = []
+  if (!type || type === 'mysql') roots.push({ path: MYSQL_PRODUCER_PATH, dbType: 'mysql' })
+  if (!type || type === 'mongo') roots.push({ path: MONGO_PRODUCER_PATH, dbType: 'mongo' })
 
   const results: DbProducer[] = []
   const seenNames = new Set<string>()
   const errors: string[] = []
 
-  for (const filterPath of paths) {
-    const args = [
-      'list-items',
-      '--filter',
-      filterPath,
-      '--type',
-      'dynamic-secret',
-      '--profile',
-      AKEYLESS_PROFILE,
-    ]
-
-    let stdout: string
+  for (const { path, dbType } of roots) {
     try {
-      stdout = await runAkeylessCommand(args)
+      const chunk = await listProducersForRoot(path, dbType)
+      for (const p of chunk) {
+        if (seenNames.has(p.name)) continue
+        seenNames.add(p.name)
+        results.push(p)
+      }
     } catch (err: any) {
-      console.error(`[akeyless-db] list-items failed for ${filterPath}:`, err.message)
+      console.error(`[akeyless-db] list producers failed for ${path}:`, err.message)
       errors.push(err.message)
-      continue // Skip this path, try the next one
-    }
-
-    let parsed: any
-    try {
-      parsed = JSON.parse(stdout)
-    } catch {
-      // The shell script uses grep + cut to extract item_name fields.
-      // If the output isn't valid JSON, fall back to line-based parsing.
-      const lines = stdout.split('\n')
-      for (const line of lines) {
-        const match = line.match(/"item_name"\s*:\s*"([^"]+)"/)
-        if (match) {
-          const name = match[1]
-          if (seenNames.has(name)) continue
-          seenNames.add(name)
-          const { cluster, database } = parseProducerPath(name)
-          results.push({ name, cluster, database, dbName: database, type: typeFromPath(name) })
-        }
-      }
-      continue
-    }
-
-    // The JSON response has an `items` array with objects containing `item_name`.
-    const items: any[] = parsed?.items ?? (Array.isArray(parsed) ? parsed : [])
-    for (const item of items) {
-      const name: string = item.item_name ?? item.name ?? ''
-      if (!name || seenNames.has(name)) continue
-      seenNames.add(name)
-      const { cluster, database } = parseProducerPath(name)
-      const sra = item?.item_general_info?.secure_remote_access_details
-      const dbName: string = sra?.db_name ?? database
-      results.push({ name, cluster, database, dbName, type: typeFromPath(name) })
-
-      // Cache host/dbName so openTunnel doesn't need a second list-items call
-      if (sra) {
-        const hostRaw = sra.host
-        const host: string = Array.isArray(hostRaw) ? hostRaw[0] : String(hostRaw ?? '')
-        if (host) {
-          producerDetailsCache.set(name, { host, dbName })
-        }
-      }
     }
   }
 
-  // If all paths failed and we got no results, throw with the collected errors
-  if (results.length === 0 && errors.length > 0) {
-    throw new Error(errors.join('; '))
+  if (results.length > 0) {
+    producersListCache = { at: Date.now(), producers: results }
+    writeDiskProducersCache(results)
+    return { producers: filterByType(results, type) }
   }
 
-  return results
+  if (diskCache && diskCache.producers.length > 0) {
+    producersListCache = { at: diskCache.at, producers: diskCache.producers }
+    console.warn('[akeyless-db] gateway failed; serving stale disk cache')
+    return {
+      producers: filterByType(diskCache.producers, type),
+      stale: true,
+    }
+  }
+
+  throw new Error(
+    errors.length > 0 ? errors.join('; ') : 'Failed to load database producers from Akeyless',
+  )
 }
 
 /**
@@ -316,67 +530,52 @@ export async function getCredentials(producerName: string): Promise<DbCredential
 }
 
 /**
- * Fetches host and dbName metadata for a given producer from its item details.
- * Uses cache populated by listProducers to avoid a second expensive list-items call.
+ * Fetches host and dbName for connect — uses describe-item (one item) instead of
+ * scanning the full producer list (which often hits unexpected EOF).
  */
 export async function getProducerDetails(
   producerName: string,
 ): Promise<{ host: string; dbName: string }> {
-  // Check cache first (populated by listProducers)
   const cached = producerDetailsCache.get(producerName)
   if (cached) {
     console.log(`[akeyless-db] getProducerDetails cache hit for ${producerName}`)
     return cached
   }
 
-  console.log(`[akeyless-db] getProducerDetails cache miss — fetching from API`)
+  console.log(`[akeyless-db] getProducerDetails via describe-item for ${producerName}`)
 
-  // Determine the producer path (mysql or mongo) for the filter
-  const producerPath = producerName.startsWith(MYSQL_PRODUCER_PATH)
-    ? MYSQL_PRODUCER_PATH
-    : MONGO_PRODUCER_PATH
-
-  const args = [
-    'list-items',
-    '--filter',
-    producerPath,
-    '--type',
-    'dynamic-secret',
+  const stdout = await runAkeylessCommand([
+    'describe-item',
+    '--name',
+    producerName,
     '--profile',
     AKEYLESS_PROFILE,
-  ]
-
-  const stdout = await runAkeylessCommand(args)
+    '--json',
+  ])
 
   let parsed: any
   try {
     parsed = JSON.parse(stdout)
   } catch {
-    throw new Error('Failed to parse list-items JSON output for producer details')
+    throw new Error('Failed to parse describe-item JSON output for producer details')
   }
 
-  const items: any[] = parsed?.items ?? (Array.isArray(parsed) ? parsed : [])
-  const item = items.find((i: any) => (i.item_name ?? i.name) === producerName)
-
-  if (!item) {
-    throw new Error(`Producer not found in list-items output: ${producerName}`)
-  }
-
-  const sraDetails = item?.item_general_info?.secure_remote_access_details
+  const sraDetails = parsed?.item_general_info?.secure_remote_access_details
   if (!sraDetails) {
     throw new Error(`No secure_remote_access_details found for producer: ${producerName}`)
   }
 
-  // host can be a string or an array — the shell script uses `jq '.host' | jq '.[]'`
   const hostRaw = sraDetails.host
   const host: string = Array.isArray(hostRaw) ? hostRaw[0] : String(hostRaw ?? '')
-  const dbName: string = String(sraDetails.db_name ?? '')
+  const dbName: string = String(sraDetails.db_name ?? dbNameFromLeaf(producerName.split('/').pop() ?? ''))
 
   if (!host) {
     throw new Error(`No host found in producer details for: ${producerName}`)
   }
 
-  return { host, dbName }
+  const details = { host, dbName }
+  producerDetailsCache.set(producerName, details)
+  return details
 }
 
 /**
@@ -449,8 +648,19 @@ export async function openTunnel(producerName: string): Promise<TunnelInfo> {
     console.log(
       `[akeyless-db] tunnel ${tunnelId} exited (code=${code}, signal=${signal})`,
     )
+    const wasActive = activeTunnels.has(tunnelId)
+    const unexpected = wasActive && !tunnelInfo.closing
     tunnelInfo.connected = false
     tunnelInfo.process = null
+    activeTunnels.delete(tunnelId)
+    void mysqlClient.disconnect(tunnelId).catch(() => {})
+    if (unexpected) {
+      const reason =
+        signal === 'SIGTERM'
+          ? 'SSH tunnel closed unexpectedly'
+          : `SSH tunnel closed (code=${code ?? 'null'}, signal=${signal ?? 'null'})`
+      notifyTunnelClosed(tunnelId, reason)
+    }
   })
 
   return tunnelInfo
@@ -463,6 +673,7 @@ export function closeTunnel(tunnelId: string): void {
   const tunnel = activeTunnels.get(tunnelId)
   if (!tunnel) return
 
+  tunnel.closing = true
   if (tunnel.process) {
     try {
       tunnel.process.kill('SIGTERM')
@@ -505,10 +716,12 @@ export function closeAllTunnels(): void {
 
 export const akeylessDb = {
   listProducers,
+  clearProducersCache,
   getCredentials,
   getProducerDetails,
   openTunnel,
   closeTunnel,
   getActiveTunnels,
   closeAllTunnels,
+  setAkeylessDbMainWindow,
 }

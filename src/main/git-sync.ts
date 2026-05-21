@@ -121,10 +121,107 @@ export async function countCommitsAhead(folderPath: string, baseBranch: string):
   }
 }
 
+/**
+ * Count tracked working-tree changes that can block pull/checkout.
+ * Untracked-only lines (?? / !!) are ignored — they do not block ff-only pull.
+ */
+export function countDirtyPorcelainLines(porcelain: string): number {
+  return parsePorcelainPaths(porcelain).tracked.length
+}
+
+/** Strip optional double quotes from git-quoted path entries. */
+function unquoteGitPath(path: string): string {
+  if (path.length >= 2 && path.startsWith('"') && path.endsWith('"')) {
+    return path.slice(1, -1).replace(/\\(["\\])/g, '$1')
+  }
+  return path
+}
+
+/** Path from a porcelain v1 line: XY (2 chars) then whitespace then path. */
+function pathFromPorcelainV1Line(line: string): string {
+  let path = line.slice(2).trimStart()
+  if (path.includes(' -> ')) {
+    path = path.split(' -> ').pop()!.trim()
+  }
+  return unquoteGitPath(path)
+}
+
+/** Split porcelain status into tracked changes vs untracked paths. */
+export function parsePorcelainPaths(porcelain: string): { tracked: string[]; untracked: string[] } {
+  const tracked: string[] = []
+  const untracked: string[] = []
+  if (!porcelain.trim()) return { tracked, untracked }
+
+  for (const line of porcelain.split('\n')) {
+    if (!line.trim()) continue
+    // Porcelain v2 (1/2/?/! prefix) — path is the last space-separated field
+    if (/^[12?!] /.test(line)) {
+      const path = unquoteGitPath(line.split(/\s+/).pop() ?? '')
+      if (!path) continue
+      if (line.startsWith('? ') || line.startsWith('! ')) {
+        untracked.push(path)
+      } else {
+        tracked.push(path)
+      }
+      continue
+    }
+
+    const xy = line.slice(0, 2)
+    const path = pathFromPorcelainV1Line(line)
+    if (!path) continue
+    if (xy === '??' || xy === '!!') {
+      untracked.push(path)
+    } else {
+      tracked.push(path)
+    }
+  }
+  return { tracked, untracked }
+}
+
+export async function getWorkingTreeChanges(
+  folderPath: string,
+): Promise<{ tracked: string[]; untracked: string[] }> {
+  try {
+    const status = await gitStdout(['status', '--porcelain=1'], { cwd: folderPath })
+    return parsePorcelainPaths(status)
+  } catch {
+    return { tracked: [], untracked: [] }
+  }
+}
+
+async function stashLocalChanges(
+  folderPath: string,
+  includeUntracked: boolean,
+): Promise<void> {
+  const args = ['stash', 'push', '-m', 'DevHub-AI: auto-stash before pull']
+  if (includeUntracked) args.push('-u')
+  await execFileAsync('git', args, {
+    cwd: folderPath,
+    encoding: 'utf-8',
+    timeout: 15000,
+    maxBuffer: 1024 * 1024,
+  })
+}
+
+async function discardTrackedChanges(folderPath: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return
+  await execFileAsync('git', ['restore', '--staged', '--worktree', '--', ...paths], {
+    cwd: folderPath,
+    encoding: 'utf-8',
+    timeout: 10000,
+    maxBuffer: 1024 * 1024,
+  })
+}
+
+export type PullFolderOptions = {
+  localChanges?: 'stash' | 'discard'
+  stashUntracked?: boolean
+}
+
 export async function countUncommitted(folderPath: string): Promise<number> {
   try {
-    const status = await gitStdout(['status', '--porcelain'], { cwd: folderPath })
-    return status ? status.split('\n').length : 0
+    const status = await gitStdout(['status', '--porcelain=1'], { cwd: folderPath })
+    return countDirtyPorcelainLines(status)
   } catch {
     return 0
   }
@@ -162,23 +259,13 @@ export async function buildGitFolderMeta(folderPath: string, fetch = false): Pro
   const gitRemote = hasRemote ? await getOriginRemoteUrl(folderPath) : null
   const baseBranch = await resolveBaseBranch(folderPath)
 
+  let fetchError: string | undefined
   if (fetch && hasRemote) {
     try {
       await gitFetchOrigin(folderPath)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      return {
-        gitBranch,
-        gitRemote,
-        isGitRepo: true,
-        baseBranch,
-        currentBranch,
-        commitsBehind: 0,
-        commitsAhead: 0,
-        uncommitted: await countUncommitted(folderPath),
-        state: 'error',
-        error: msg.slice(0, 200),
-      }
+      fetchError = msg.slice(0, 200)
     }
   }
 
@@ -209,6 +296,7 @@ export async function buildGitFolderMeta(folderPath: string, fetch = false): Pro
     commitsAhead,
     uncommitted,
     state,
+    error: fetchError,
   }
 }
 
@@ -226,7 +314,10 @@ export async function buildGitSyncStatus(folderPath: string, fetch = false): Pro
   }
 }
 
-export async function pullFolderToBase(folderPath: string): Promise<{
+export async function pullFolderToBase(
+  folderPath: string,
+  options: PullFolderOptions = {},
+): Promise<{
   success: boolean
   error?: string
   branch?: string | null
@@ -249,11 +340,25 @@ export async function pullFolderToBase(folderPath: string): Promise<{
     return { success: false, error: 'Invalid branch name' }
   }
 
-  const uncommitted = await countUncommitted(folderPath)
-  if (uncommitted > 0) {
-    return {
-      success: false,
-      error: 'You have uncommitted changes. Commit or stash them first.',
+  const { tracked, untracked } = await getWorkingTreeChanges(folderPath)
+  if (tracked.length > 0) {
+    if (!options.localChanges) {
+      return {
+        success: false,
+        error:
+          `${tracked.length} tracked file(s) have local changes — commit or stash before pull. ` +
+          '(Untracked files such as new folders do not block pull.)',
+      }
+    }
+    try {
+      if (options.localChanges === 'stash') {
+        await stashLocalChanges(folderPath, !!options.stashUntracked && untracked.length > 0)
+      } else {
+        await discardTrackedChanges(folderPath, tracked)
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { success: false, error: msg.slice(0, 200) }
     }
   }
 

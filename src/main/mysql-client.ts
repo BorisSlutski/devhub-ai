@@ -22,6 +22,9 @@ export interface QueryResult {
   affectedRows: number
   executionTimeMs: number
   error?: string
+  /** True when we appended LIMIT because the query had none. */
+  rowCapApplied?: boolean
+  truncated?: boolean
 }
 
 export interface ColumnDef {
@@ -61,6 +64,11 @@ export interface DbConnection {
 
 const MAX_ROWS = 10_000
 const CONNECT_TIMEOUT_MS = 10_000
+/** Metadata (SHOW TABLES, etc.) over SSH tunnels. */
+const QUERY_TIMEOUT_MS = 30_000
+/** User SQL — long enough for analytics, short enough to fail visibly. */
+const EXEC_QUERY_TIMEOUT_MS = 90_000
+const PING_TIMEOUT_MS = 5_000
 
 // ---------------------------------------------------------------------------
 // MySQL field-type code to human-readable name mapping
@@ -100,6 +108,43 @@ const FIELD_TYPE_NAMES: Record<number, string> = {
 
 function fieldTypeName(typeCode: number): string {
   return FIELD_TYPE_NAMES[typeCode] ?? `UNKNOWN(${typeCode})`
+}
+
+async function queryWithTimeout(
+  connection: any,
+  sql: string,
+  params?: unknown[],
+  timeoutMs = QUERY_TIMEOUT_MS,
+): Promise<[unknown, unknown]> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const queryPromise =
+      params !== undefined ? connection.query(sql, params) : connection.query(sql)
+    return (await Promise.race([
+      queryPromise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Query timed out after ${Math.round(timeoutMs / 1000)}s`))
+        }, timeoutMs)
+      }),
+    ])) as [unknown, unknown]
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** Row from SHOW FULL TABLES: [name, BASE TABLE|VIEW] (rowsAsArray) or named fields. */
+function parseShowFullTablesRow(r: any, database: string): [string, string] {
+  if (Array.isArray(r)) return [String(r[0]), String(r[1] ?? '')]
+  const nameKey = `Tables_in_${database}`
+  if (r && typeof r === 'object' && nameKey in r) {
+    return [String(r[nameKey]), String(r.Table_type ?? '')]
+  }
+  if (r && typeof r === 'object' && 'Table_type' in r) {
+    const name = Object.keys(r).find((k) => k.startsWith('Tables_in_'))
+    return [name ? String(r[name]) : '', String(r.Table_type ?? '')]
+  }
+  return ['', '']
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +188,9 @@ class MysqlClient {
       database,
       connectTimeout: CONNECT_TIMEOUT_MS,
       multipleStatements: false,
-      rowsAsArray: true // we always want array rows for efficient transfer
+      rowsAsArray: true,
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 10_000,
     })
 
     // Verify the connection is alive.
@@ -193,7 +240,7 @@ class MysqlClient {
       rows: [],
       rowCount: 0,
       affectedRows: 0,
-      executionTimeMs: 0
+      executionTimeMs: 0,
     }
 
     const entry = this.connections.get(id)
@@ -204,47 +251,66 @@ class MysqlClient {
     const start = performance.now()
 
     try {
-      const [result, fields] = await entry.connection.query(sql)
+      await queryWithTimeout(entry.connection, 'SELECT 1', undefined, PING_TIMEOUT_MS)
+
+      const { sql: execSql, rowCapApplied } = capUnboundedSelect(sql, MAX_ROWS)
+      const [result, fields] = await queryWithTimeout(
+        entry.connection,
+        execSql,
+        undefined,
+        EXEC_QUERY_TIMEOUT_MS,
+      )
       const executionTimeMs = Math.round((performance.now() - start) * 100) / 100
 
-      // SELECT-like queries return an array of rows and a fields descriptor.
       if (Array.isArray(result)) {
         const columns: ColumnDef[] = (fields ?? []).map((f: any) => ({
           name: f.name as string,
-          type: fieldTypeName(f.columnType ?? f.type ?? 0)
+          type: fieldTypeName(f.columnType ?? f.type ?? 0),
         }))
 
-        const rows = result.length > MAX_ROWS ? result.slice(0, MAX_ROWS) : result
+        let rows = result as any[][]
+        let truncated = false
+        if (rows.length > MAX_ROWS) {
+          rows = rows.slice(0, MAX_ROWS)
+          truncated = true
+        }
 
         return {
           columns,
-          rows: rows as any[][],
+          rows,
           rowCount: rows.length,
           affectedRows: 0,
-          executionTimeMs
+          executionTimeMs,
+          rowCapApplied,
+          truncated,
         }
       }
 
-      // DML / DDL — result is an OkPacket-like object.
       return {
         columns: [],
         rows: [],
         rowCount: 0,
         affectedRows: (result as any).affectedRows ?? 0,
-        executionTimeMs
+        executionTimeMs,
       }
     } catch (err: any) {
       const executionTimeMs = Math.round((performance.now() - start) * 100) / 100
+      const msg = err?.message ?? String(err)
 
-      // If the error indicates the connection is gone, mark it.
-      if (isConnectionLostError(err)) {
+      if (/timed out/i.test(msg) || isConnectionLostError(err)) {
         entry.meta.connected = false
+        this.connections.delete(id)
+        try {
+          await entry.connection.destroy()
+        } catch {
+          // best effort — free the tunnel port for a reconnect
+        }
       }
 
       return {
         ...empty,
         executionTimeMs,
-        error: err.message ?? String(err)
+        error: msg,
       }
     }
   }
@@ -259,7 +325,7 @@ class MysqlClient {
     }
 
     try {
-      const [rows] = await entry.connection.query('SHOW DATABASES')
+      const [rows] = await queryWithTimeout(entry.connection, 'SHOW DATABASES')
       return (rows as any[]).map((r: any) => (Array.isArray(r) ? r[0] : r.Database) as string)
     } catch (err: any) {
       if (isConnectionLostError(err)) entry.meta.connected = false
@@ -270,6 +336,9 @@ class MysqlClient {
   /**
    * List tables (and views) in the given database, falling back to the
    * connection's current database.
+   *
+   * Uses SHOW FULL TABLES (fast data-dictionary path). No INFORMATION_SCHEMA
+   * fallback — that path can hang for minutes on large schemas over SSH tunnels.
    */
   async listTables(id: string, database?: string): Promise<TableInfo[]> {
     const entry = this.connections.get(id)
@@ -277,28 +346,30 @@ class MysqlClient {
       throw new Error(`No connection found for id "${id}"`)
     }
 
-    const db = database ?? entry.meta.database
+    const db = (database ?? entry.meta.database)?.trim()
+    if (!db) {
+      throw new Error('No database selected on this connection')
+    }
 
     try {
-      const [rows] = await entry.connection.query(
-        `SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_ROWS, TABLE_COMMENT
-         FROM INFORMATION_SCHEMA.TABLES
-         WHERE TABLE_SCHEMA = ?
-         ORDER BY TABLE_NAME`,
-        [db]
+      const qualifiedDb = entry.connection.escapeId(db)
+      const [rows] = await queryWithTimeout(
+        entry.connection,
+        `SHOW FULL TABLES FROM ${qualifiedDb}`,
       )
 
-      return (rows as any[]).map((r: any) => {
-        // With rowsAsArray the row is a positional array.
-        const row = Array.isArray(r) ? r : [r.TABLE_NAME, r.TABLE_TYPE, r.ENGINE, r.TABLE_ROWS, r.TABLE_COMMENT]
+      const tables = (rows as any[]).map((r: any) => {
+        const [name, tableType] = parseShowFullTablesRow(r, db)
         return {
-          name: row[0] as string,
-          type: (row[1] === 'VIEW' ? 'VIEW' : 'TABLE') as 'TABLE' | 'VIEW',
-          engine: (row[2] as string) ?? null,
-          rows: row[3] != null ? Number(row[3]) : null,
-          comment: (row[4] as string) ?? ''
+          name,
+          type: (tableType === 'VIEW' ? 'VIEW' : 'TABLE') as 'TABLE' | 'VIEW',
+          engine: null,
+          rows: null,
+          comment: ''
         }
       })
+      tables.sort((a, b) => a.name.localeCompare(b.name))
+      return tables
     } catch (err: any) {
       if (isConnectionLostError(err)) entry.meta.connected = false
       throw err
@@ -369,6 +440,21 @@ class MysqlClient {
  * Returns true if the error indicates the underlying TCP connection is dead
  * (server gone, connection reset, protocol desync, etc.).
  */
+/**
+ * Append LIMIT to bare SELECT/WITH so MySQL does not stream millions of rows over the tunnel.
+ */
+function capUnboundedSelect(
+  sql: string,
+  maxRows: number,
+): { sql: string; rowCapApplied: boolean } {
+  const trimmed = sql.trim()
+  const body = trimmed.replace(/;+\s*$/, '')
+  if (/;\s*\S/.test(body)) return { sql, rowCapApplied: false }
+  if (!/^\s*(select|with)\b/i.test(body)) return { sql, rowCapApplied: false }
+  if (/\blimit\s+(\d+|\?)/i.test(body)) return { sql, rowCapApplied: false }
+  return { sql: `${body} LIMIT ${maxRows + 1}`, rowCapApplied: true }
+}
+
 function isConnectionLostError(err: any): boolean {
   if (!err) return false
   const code: string = err.code ?? ''
