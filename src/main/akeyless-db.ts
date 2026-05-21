@@ -10,10 +10,13 @@ import { mysqlClient } from './mysql-client'
 // ---------------------------------------------------------------------------
 
 export interface DbProducer {
-  name: string // full akeyless path e.g. "/prod/dba/developer-access/mysql/kgb-xxx/cluster/dbname"
-  cluster: string // extracted cluster name (7th segment)
-  database: string // extracted database/host name (8th segment)
-  dbName: string // actual database name from secure_remote_access_details.db_name
+  name: string // full path e.g. /prod/dba/developer-access/mysql/<kgb-tag>/.../<producer-leaf>
+  /** KGB ownership tag (path segment after mysql|mongo), e.g. kgb-aglianico — not a DB cluster. */
+  kgb: string
+  /** Akeyless producer item leaf (host routing id), e.g. db-mysql-preprod-self-service5a.42-mydb */
+  producer: string
+  /** MySQL/Mongo database (schema) name parsed from the producer leaf. */
+  dbName: string
   type: 'mysql' | 'mongo'
 }
 
@@ -29,8 +32,8 @@ export interface TunnelInfo {
   dbName: string // database name from akeyless item metadata
   localPort: number
   credentials: DbCredentials
-  cluster: string
-  database: string
+  kgb: string
+  producer: string
   type: 'mysql' | 'mongo'
   process: ChildProcess | null
   connected: boolean
@@ -195,15 +198,15 @@ function typeFromPath(name: string): 'mysql' | 'mongo' {
 
 /**
  * Parses a producer path for picker display.
- * Path: /prod/dba/developer-access/mysql/<kgb-id>/.../pdb-mysql-host.42-db_name
+ * Path: /prod/dba/developer-access/mysql/<kgb-tag>/.../<producer-leaf>
  */
-function parseProducerPath(name: string): { cluster: string; database: string; dbName: string } {
+function parseProducerPath(name: string): { kgb: string; producer: string; dbName: string } {
   const parts = name.split('/').filter(Boolean)
   const typeIdx = parts.findIndex((p) => p === 'mysql' || p === 'mongo')
-  const cluster = typeIdx >= 0 ? (parts[typeIdx + 1] ?? '') : ''
+  const kgb = typeIdx >= 0 ? (parts[typeIdx + 1] ?? '') : ''
   const leaf = parts[parts.length - 1] ?? ''
   const dbName = dbNameFromLeaf(leaf)
-  return { cluster, database: leaf, dbName }
+  return { kgb, producer: leaf, dbName }
 }
 
 /** e.g. pdb-mysql-billing0a.42-wix_billing → wix_billing */
@@ -220,13 +223,40 @@ function isTransientCliError(msg: string): boolean {
   )
 }
 
+/** Disk cache may predate kgb/producer field names (was cluster/database). */
+function normalizeCachedProducer(raw: Record<string, unknown>): DbProducer | null {
+  const name = typeof raw.name === 'string' ? raw.name : ''
+  if (!name) return null
+  const parsed = parseProducerPath(name)
+  const kgb =
+    typeof raw.kgb === 'string'
+      ? raw.kgb
+      : typeof raw.cluster === 'string'
+        ? raw.cluster
+        : parsed.kgb
+  const producer =
+    typeof raw.producer === 'string'
+      ? raw.producer
+      : typeof raw.database === 'string'
+        ? raw.database
+        : parsed.producer
+  const dbName = typeof raw.dbName === 'string' ? raw.dbName : parsed.dbName
+  const type =
+    raw.type === 'mysql' || raw.type === 'mongo' ? raw.type : typeFromPath(name)
+  return { name, kgb, producer, dbName, type }
+}
+
 function readDiskProducersCache(): { at: number; producers: DbProducer[] } | null {
   try {
     if (!existsSync(PRODUCERS_DISK_CACHE_FILE)) return null
     const raw = readFileSync(PRODUCERS_DISK_CACHE_FILE, 'utf-8')
-    const parsed = JSON.parse(raw) as { at?: number; producers?: DbProducer[] }
+    const parsed = JSON.parse(raw) as { at?: number; producers?: unknown[] }
     if (!parsed.at || !Array.isArray(parsed.producers) || parsed.producers.length === 0) return null
-    return { at: parsed.at, producers: parsed.producers }
+    const producers = parsed.producers
+      .map((p) => normalizeCachedProducer(p as Record<string, unknown>))
+      .filter((p): p is DbProducer => p !== null)
+    if (producers.length === 0) return null
+    return { at: parsed.at, producers }
   } catch {
     return null
   }
@@ -257,8 +287,8 @@ function parseListItemsToProducers(stdout: string, dbType: 'mysql' | 'mongo'): D
       const match = line.match(/"item_name"\s*:\s*"([^"]+)"/)
       if (!match) continue
       const name = match[1]
-      const { cluster, database, dbName } = parseProducerPath(name)
-      results.push({ name, cluster, database, dbName, type: dbType })
+      const { kgb, producer, dbName } = parseProducerPath(name)
+      results.push({ name, kgb, producer, dbName, type: dbType })
     }
     return results
   }
@@ -267,13 +297,13 @@ function parseListItemsToProducers(stdout: string, dbType: 'mysql' | 'mongo'): D
   for (const item of items) {
     const name: string = item.item_name ?? item.name ?? ''
     if (!name) continue
-    const { cluster, database, dbName } = parseProducerPath(name)
+    const { kgb, producer, dbName } = parseProducerPath(name)
     const sra = item?.item_general_info?.secure_remote_access_details
     const resolvedDbName: string = sra?.db_name ?? dbName
     results.push({
       name,
-      cluster,
-      database,
+      kgb,
+      producer,
       dbName: resolvedDbName,
       type: dbType,
     })
@@ -592,7 +622,7 @@ export async function openTunnel(producerName: string): Promise<TunnelInfo> {
 
   const localPort = allocatePort()
   const tunnelId = generateTunnelId()
-  const { cluster, database } = parseProducerPath(producerName)
+  const { kgb, producer } = parseProducerPath(producerName)
   const dbType = typeFromPath(producerName)
   const bin = findAkeylessBinary()
 
@@ -628,8 +658,8 @@ export async function openTunnel(producerName: string): Promise<TunnelInfo> {
     dbName: details.dbName,
     localPort,
     credentials,
-    cluster,
-    database,
+    kgb,
+    producer,
     type: dbType,
     process: child,
     connected: true,

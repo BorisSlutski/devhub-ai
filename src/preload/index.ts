@@ -383,7 +383,7 @@ const api = {
   }> => ipcRenderer.invoke('db-list-producers', type, forceRefresh),
   dbConnect: (producerName: string): Promise<{
     success: boolean; connectionId?: string; tunnelId?: string;
-    cluster?: string; database?: string; type?: string; error?: string;
+    kgb?: string; dbName?: string; type?: string; error?: string;
   }> => ipcRenderer.invoke('db-connect', producerName),
   dbDisconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('db-disconnect', connectionId),
@@ -394,7 +394,7 @@ const api = {
   }> => ipcRenderer.invoke('db-list-connections'),
   dbListSessions: (): Promise<{
     success: boolean
-    sessions: { connectionId: string; tunnelId: string; cluster: string; database: string; producerName: string }[]
+    sessions: { connectionId: string; tunnelId: string; kgb: string; dbName: string; producerName: string }[]
     error?: string
   }> => ipcRenderer.invoke('db-list-sessions'),
   onDbIdleDisconnected: (callback: (payload: { connectionId: string }) => void) => {

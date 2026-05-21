@@ -1,7 +1,10 @@
 export interface DbProducerPicker {
   name: string
-  cluster: string
-  database: string
+  /** KGB ownership tag from the Akeyless path (e.g. kgb-aglianico). */
+  kgb: string
+  /** Akeyless producer leaf / host routing id — not the MySQL database name. */
+  producer: string
+  /** MySQL/Mongo schema name. */
   dbName: string
   type: 'mysql' | 'mongo'
 }
@@ -9,15 +12,15 @@ export interface DbProducerPicker {
 function matchesProducerQuery(p: DbProducerPicker, q: string): boolean {
   return (
     p.dbName.toLowerCase().includes(q) ||
-    p.database.toLowerCase().includes(q) ||
-    p.cluster.toLowerCase().includes(q) ||
+    p.producer.toLowerCase().includes(q) ||
+    p.kgb.toLowerCase().includes(q) ||
     p.name.toLowerCase().includes(q)
   )
 }
 
 /** Stable browse identity — same display tuple from different Akeyless paths collapses to one row. */
 export function producerBrowseKey(p: DbProducerPicker): string {
-  return `${p.type}\0${p.dbName}\0${p.cluster}\0${p.database}`
+  return `${p.type}\0${p.dbName}\0${p.kgb}\0${p.producer}`
 }
 
 function pickCanonicalProducer(candidates: DbProducerPicker[]): DbProducerPicker {
@@ -26,7 +29,7 @@ function pickCanonicalProducer(candidates: DbProducerPicker[]): DbProducerPicker
   )[0]
 }
 
-/** Collapse producers that share the same browse identity (type + dbName + cluster + locality). */
+/** Collapse producers that share the same browse identity (type + dbName + kgb + producer). */
 export function dedupeProducersForBrowse(producers: DbProducerPicker[]): DbProducerPicker[] {
   const byKey = new Map<string, DbProducerPicker[]>()
   for (const p of producers) {
@@ -38,7 +41,7 @@ export function dedupeProducersForBrowse(producers: DbProducerPicker[]): DbProdu
   return Array.from(byKey.values()).map(pickCanonicalProducer)
 }
 
-/** Filter by db name, host segment, cluster, or full producer path. Empty query returns []. */
+/** Filter by db name, producer leaf, KGB tag, or full path. Empty query returns []. */
 export function filterProducers(producers: DbProducerPicker[], query: string): DbProducerPicker[] {
   const q = query.trim().toLowerCase()
   if (!q) return []
@@ -53,24 +56,24 @@ export function listProducersForBrowse(
   const q = query.trim().toLowerCase()
   const list = q ? producers.filter((p) => matchesProducerQuery(p, q)) : producers
   return dedupeProducersForBrowse(list).sort(
-    (a, b) => a.dbName.localeCompare(b.dbName) || a.cluster.localeCompare(b.cluster),
+    (a, b) => a.dbName.localeCompare(b.dbName) || a.kgb.localeCompare(b.kgb),
   )
 }
 
-export function groupProducersByCluster(
+export function groupProducersByKgb(
   producers: DbProducerPicker[],
-): { cluster: string; producers: DbProducerPicker[] }[] {
-  const byCluster = new Map<string, DbProducerPicker[]>()
+): { kgb: string; producers: DbProducerPicker[] }[] {
+  const byKgb = new Map<string, DbProducerPicker[]>()
   for (const p of producers) {
-    const list = byCluster.get(p.cluster) ?? []
+    const list = byKgb.get(p.kgb) ?? []
     list.push(p)
-    byCluster.set(p.cluster, list)
+    byKgb.set(p.kgb, list)
   }
-  return Array.from(byCluster.entries())
+  return Array.from(byKgb.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([cluster, clusterProducers]) => ({
-      cluster,
-      producers: clusterProducers.sort((a, b) => a.dbName.localeCompare(b.dbName)),
+    .map(([kgb, kgbProducers]) => ({
+      kgb,
+      producers: kgbProducers.sort((a, b) => a.dbName.localeCompare(b.dbName)),
     }))
 }
 
@@ -87,7 +90,7 @@ export function duplicateDbNames(producers: DbProducerPicker[]): Set<string> {
   return dupes
 }
 
-export function shouldShowDatabaseSubtitle(
+export function shouldShowProducerSubtitle(
   producer: DbProducerPicker,
   dupes: Set<string>,
 ): boolean {

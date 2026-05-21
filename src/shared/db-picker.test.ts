@@ -3,16 +3,16 @@ import {
   filterProducers,
   listProducersForBrowse,
   dedupeProducersForBrowse,
-  groupProducersByCluster,
+  groupProducersByKgb,
   duplicateDbNames,
-  shouldShowDatabaseSubtitle,
+  shouldShowProducerSubtitle,
   type DbProducerPicker,
 } from './db-picker'
 
 const producers: DbProducerPicker[] = [
-  { name: '/p/a', cluster: 'c1', database: 'host-a', dbName: 'mydb', type: 'mysql' },
-  { name: '/p/b', cluster: 'c1', database: 'host-b', dbName: 'mydb', type: 'mysql' },
-  { name: '/p/c', cluster: 'c2', database: 'host-c', dbName: 'other', type: 'mysql' },
+  { name: '/p/a', kgb: 'kgb-a', producer: 'host-a', dbName: 'mydb', type: 'mysql' },
+  { name: '/p/b', kgb: 'kgb-a', producer: 'host-b', dbName: 'mydb', type: 'mysql' },
+  { name: '/p/c', kgb: 'kgb-b', producer: 'host-c', dbName: 'other', type: 'mysql' },
 ]
 
 describe('filterProducers', () => {
@@ -21,32 +21,32 @@ describe('filterProducers', () => {
     expect(filterProducers(producers, '   ')).toEqual([])
   })
 
-  it('matches dbName across clusters', () => {
+  it('matches dbName across KGB tags', () => {
     const matches = filterProducers(producers, 'mydb')
     expect(matches).toHaveLength(2)
     expect(matches.every((p) => p.dbName === 'mydb')).toBe(true)
   })
 
-  it('matches cluster name', () => {
-    expect(filterProducers(producers, 'c2')).toHaveLength(1)
+  it('matches KGB tag', () => {
+    expect(filterProducers(producers, 'kgb-b')).toHaveLength(1)
   })
 
-  it('matches database host segment', () => {
+  it('matches producer leaf', () => {
     expect(filterProducers(producers, 'host-b')).toHaveLength(1)
   })
 })
 
-describe('groupProducersByCluster', () => {
-  it('groups and sorts clusters', () => {
-    const groups = groupProducersByCluster(filterProducers(producers, 'mydb'))
-    expect(groups.map((g) => g.cluster)).toEqual(['c1'])
+describe('groupProducersByKgb', () => {
+  it('groups and sorts by KGB tag', () => {
+    const groups = groupProducersByKgb(filterProducers(producers, 'mydb'))
+    expect(groups.map((g) => g.kgb)).toEqual(['kgb-a'])
     expect(groups[0].producers).toHaveLength(2)
   })
 })
 
 describe('duplicateDbNames', () => {
-  it('detects duplicate dbName in cluster list', () => {
-    const dupes = duplicateDbNames(producers.filter((p) => p.cluster === 'c1'))
+  it('detects duplicate dbName under same KGB', () => {
+    const dupes = duplicateDbNames(producers.filter((p) => p.kgb === 'kgb-a'))
     expect(dupes.has('mydb')).toBe(true)
     expect(dupes.has('other')).toBe(false)
   })
@@ -55,19 +55,19 @@ describe('duplicateDbNames', () => {
 describe('dedupeProducersForBrowse', () => {
   it('collapses identical browse keys to one row', () => {
     const dupes: DbProducerPicker[] = [
-      { name: '/prod/.../long-path/cronulla', cluster: 'c1', database: 'loc', dbName: 'cronulla', type: 'mysql' },
-      { name: '/p/a', cluster: 'c1', database: 'loc', dbName: 'cronulla', type: 'mysql' },
-      { name: '/p/b', cluster: 'c1', database: 'loc', dbName: 'cronulla', type: 'mysql' },
+      { name: '/prod/.../long-path/cronulla', kgb: 'kgb-a', producer: 'loc', dbName: 'cronulla', type: 'mysql' },
+      { name: '/p/a', kgb: 'kgb-a', producer: 'loc', dbName: 'cronulla', type: 'mysql' },
+      { name: '/p/b', kgb: 'kgb-a', producer: 'loc', dbName: 'cronulla', type: 'mysql' },
     ]
     const list = dedupeProducersForBrowse(dupes)
     expect(list).toHaveLength(1)
     expect(list[0].name).toBe('/p/a')
   })
 
-  it('keeps rows that differ by locality', () => {
+  it('keeps rows that differ by producer leaf', () => {
     const list = dedupeProducersForBrowse([
-      { name: '/p/1', cluster: 'c1', database: 'loc_a', dbName: 'domain_audit', type: 'mysql' },
-      { name: '/p/2', cluster: 'c1', database: 'loc_b', dbName: 'domain_audit', type: 'mysql' },
+      { name: '/p/1', kgb: 'kgb-a', producer: 'loc_a', dbName: 'domain_audit', type: 'mysql' },
+      { name: '/p/2', kgb: 'kgb-a', producer: 'loc_b', dbName: 'domain_audit', type: 'mysql' },
     ])
     expect(list).toHaveLength(2)
   })
@@ -85,10 +85,10 @@ describe('listProducersForBrowse', () => {
   })
 })
 
-describe('shouldShowDatabaseSubtitle', () => {
+describe('shouldShowProducerSubtitle', () => {
   it('shows subtitle when dbName is duplicated', () => {
-    const dupes = duplicateDbNames(producers.filter((p) => p.cluster === 'c1'))
-    expect(shouldShowDatabaseSubtitle(producers[0], dupes)).toBe(true)
-    expect(shouldShowDatabaseSubtitle(producers[2], dupes)).toBe(false)
+    const dupes = duplicateDbNames(producers.filter((p) => p.kgb === 'kgb-a'))
+    expect(shouldShowProducerSubtitle(producers[0], dupes)).toBe(true)
+    expect(shouldShowProducerSubtitle(producers[2], dupes)).toBe(false)
   })
 })

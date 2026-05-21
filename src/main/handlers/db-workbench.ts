@@ -83,8 +83,8 @@ export function registerDbWorkbenchHandlers() {
         success: true,
         connectionId: conn.id,
         tunnelId: tunnel.id,
-        cluster: tunnel.cluster,
-        database: tunnel.dbName,
+        kgb: tunnel.kgb,
+        dbName: tunnel.dbName,
         type: tunnel.type,
       }
     } catch (err: any) {
@@ -120,8 +120,8 @@ export function registerDbWorkbenchHandlers() {
         .map((t) => ({
           connectionId: t.id,
           tunnelId: t.id,
-          cluster: t.cluster,
-          database: t.dbName || t.database,
+          kgb: t.kgb,
+          dbName: t.dbName,
           producerName: t.producerName,
         }))
       return { success: true, sessions }
