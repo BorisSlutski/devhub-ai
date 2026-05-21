@@ -16,4 +16,5 @@ coverage/
 test-results/
 .claude/worktrees/
 .claude/cc10x/
+.octocode/
 package-lock.json

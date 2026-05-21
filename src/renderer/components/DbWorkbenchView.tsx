@@ -685,7 +685,7 @@ export function DbWorkbenchView() {
             notes.push('Auto-added LIMIT 10001 (query had no LIMIT — avoids slow full table scans over SSH).')
           }
           if (res.truncated) {
-            notes.push(`Showing first 10,000 of ${res.rowCount}+ rows.`)
+            notes.push('Showing first 10,000 rows (more may exist — add a narrower WHERE or LIMIT).')
           }
           updateSessionWorkspace(activeSessionId, (w) => ({
             queryRunning: false,

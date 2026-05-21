@@ -59,7 +59,8 @@ export function App() {
   useEffect(() => {
     if (!loaded || hydratedRef.current) return
     hydratedRef.current = true
-    if (state.activeTab && (state.activeTab as string) !== 'airflow') setActiveTab(state.activeTab)
+    const tab = state.activeTab as string | undefined
+    if (tab && tab !== 'airflow') setActiveTab(state.activeTab!)
     if (state.selectedProjectId) setSelectedProjectId(state.selectedProjectId)
   }, [loaded, state.activeTab, state.selectedProjectId])
 
