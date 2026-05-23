@@ -9,11 +9,21 @@ export interface DbProducerPicker {
   type: 'mysql' | 'mongo'
 }
 
+/** Host/cluster id from producer leaf (leaf minus db name suffix). */
+export function clusterFromProducer(p: Pick<DbProducerPicker, 'producer' | 'dbName'>): string {
+  const suffix = `-${p.dbName}`
+  if (p.producer.endsWith(suffix)) {
+    return p.producer.slice(0, -suffix.length)
+  }
+  return p.producer
+}
+
 function matchesProducerQuery(p: DbProducerPicker, q: string): boolean {
   return (
     p.dbName.toLowerCase().includes(q) ||
     p.producer.toLowerCase().includes(q) ||
     p.kgb.toLowerCase().includes(q) ||
+    clusterFromProducer(p).toLowerCase().includes(q) ||
     p.name.toLowerCase().includes(q)
   )
 }
@@ -58,6 +68,38 @@ export function listProducersForBrowse(
   return dedupeProducersForBrowse(list).sort(
     (a, b) => a.dbName.localeCompare(b.dbName) || a.kgb.localeCompare(b.kgb),
   )
+}
+
+export function applyProducerBrowseFilters(
+  producers: DbProducerPicker[],
+  filters: { kgb?: string; cluster?: string },
+): DbProducerPicker[] {
+  const kgb = filters.kgb?.trim()
+  const cluster = filters.cluster?.trim()
+  if (!kgb && !cluster) return producers
+  return producers.filter((p) => {
+    if (kgb && p.kgb !== kgb) return false
+    if (cluster && clusterFromProducer(p) !== cluster) return false
+    return true
+  })
+}
+
+export function groupProducersByCluster(
+  producers: DbProducerPicker[],
+): { cluster: string; producers: DbProducerPicker[] }[] {
+  const byCluster = new Map<string, DbProducerPicker[]>()
+  for (const p of producers) {
+    const cluster = clusterFromProducer(p)
+    const list = byCluster.get(cluster) ?? []
+    list.push(p)
+    byCluster.set(cluster, list)
+  }
+  return Array.from(byCluster.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([cluster, clusterProducers]) => ({
+      cluster,
+      producers: clusterProducers.sort((a, b) => a.dbName.localeCompare(b.dbName)),
+    }))
 }
 
 export function groupProducersByKgb(

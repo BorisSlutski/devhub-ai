@@ -4,6 +4,9 @@ import {
   listProducersForBrowse,
   dedupeProducersForBrowse,
   groupProducersByKgb,
+  groupProducersByCluster,
+  clusterFromProducer,
+  applyProducerBrowseFilters,
   duplicateDbNames,
   shouldShowProducerSubtitle,
   type DbProducerPicker,
@@ -13,6 +16,13 @@ const producers: DbProducerPicker[] = [
   { name: '/p/a', kgb: 'kgb-a', producer: 'host-a', dbName: 'mydb', type: 'mysql' },
   { name: '/p/b', kgb: 'kgb-a', producer: 'host-b', dbName: 'mydb', type: 'mysql' },
   { name: '/p/c', kgb: 'kgb-b', producer: 'host-c', dbName: 'other', type: 'mysql' },
+  {
+    name: '/p/d',
+    kgb: 'kgb-a',
+    producer: 'db-mysql-billing0a.42-wix_billing',
+    dbName: 'wix_billing',
+    type: 'mysql',
+  },
 ]
 
 describe('filterProducers', () => {
@@ -33,6 +43,35 @@ describe('filterProducers', () => {
 
   it('matches producer leaf', () => {
     expect(filterProducers(producers, 'host-b')).toHaveLength(1)
+  })
+
+  it('matches cluster id derived from producer leaf', () => {
+    expect(filterProducers(producers, 'billing0a')).toHaveLength(1)
+  })
+})
+
+describe('clusterFromProducer', () => {
+  it('strips db name suffix from producer leaf', () => {
+    expect(clusterFromProducer(producers[3])).toBe('db-mysql-billing0a.42')
+  })
+})
+
+describe('groupProducersByCluster', () => {
+  it('groups and sorts by cluster id', () => {
+    const groups = groupProducersByCluster(filterProducers(producers, 'mydb'))
+    expect(groups.map((g) => g.cluster)).toEqual(['host-a', 'host-b'])
+    expect(groups[0].producers).toHaveLength(1)
+  })
+})
+
+describe('applyProducerBrowseFilters', () => {
+  it('filters by kgb and cluster together', () => {
+    const filtered = applyProducerBrowseFilters(producers, {
+      kgb: 'kgb-a',
+      cluster: 'host-a',
+    })
+    expect(filtered).toHaveLength(1)
+    expect(filtered[0].producer).toBe('host-a')
   })
 })
 
@@ -76,7 +115,7 @@ describe('dedupeProducersForBrowse', () => {
 describe('listProducersForBrowse', () => {
   it('returns all producers sorted when query is empty', () => {
     const list = listProducersForBrowse(producers, '')
-    expect(list).toHaveLength(3)
+    expect(list).toHaveLength(4)
     expect(list[0].dbName).toBe('mydb')
   })
 

@@ -8,6 +8,9 @@ import {
   listProducersForBrowse,
   dedupeProducersForBrowse,
   groupProducersByKgb,
+  groupProducersByCluster,
+  clusterFromProducer,
+  applyProducerBrowseFilters,
   duplicateDbNames,
   shouldShowProducerSubtitle,
 } from '../../shared/db-picker'
@@ -179,8 +182,11 @@ export function DbWorkbenchView() {
   const [producers, setProducers] = useState<DbProducer[]>([])
   const [producersLoading, setProducersLoading] = useState(false)
   const [producerSearch, setProducerSearch] = useState('')
-  const [pickerMode, setPickerMode] = useState<'kgb' | 'database'>('kgb')
+  const [pickerMode, setPickerMode] = useState<'kgb' | 'cluster' | 'database'>('kgb')
   const [selectedKgb, setSelectedKgb] = useState<string | null>(null)
+  const [selectedCluster, setSelectedCluster] = useState<string | null>(null)
+  const [filterKgb, setFilterKgb] = useState('')
+  const [filterCluster, setFilterCluster] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   const runQueryRef = useRef<(sqlOverride?: string) => void>(() => {})
@@ -343,6 +349,9 @@ export function DbWorkbenchView() {
     setProducerSearch('')
     setPickerMode('kgb')
     setSelectedKgb(null)
+    setSelectedCluster(null)
+    setFilterKgb('')
+    setFilterCluster('')
     await loadProducers(false)
   }, [loadProducers])
 
@@ -357,19 +366,40 @@ export function DbWorkbenchView() {
     [producers],
   )
 
+  const clusterTags = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const p of producers) {
+      const cluster = clusterFromProducer(p)
+      counts.set(cluster, (counts.get(cluster) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [producers])
+
   const searchActive = producerSearch.trim().length > 0
   const globalSearchMatches = useMemo(
-    () => filterProducers(producers, producerSearch),
-    [producers, producerSearch],
+    () =>
+      applyProducerBrowseFilters(filterProducers(producers, producerSearch), {
+        kgb: filterKgb,
+        cluster: filterCluster,
+      }),
+    [producers, producerSearch, filterKgb, filterCluster],
   )
-  const globalSearchGroups = useMemo(
+  const globalSearchKgbGroups = useMemo(
     () => groupProducersByKgb(globalSearchMatches),
+    [globalSearchMatches],
+  )
+  const globalSearchClusterGroups = useMemo(
+    () => groupProducersByCluster(globalSearchMatches),
     [globalSearchMatches],
   )
 
   const databaseBrowseList = useMemo(
-    () => listProducersForBrowse(producers, producerSearch),
-    [producers, producerSearch],
+    () =>
+      applyProducerBrowseFilters(listProducersForBrowse(producers, producerSearch), {
+        kgb: filterKgb,
+        cluster: filterCluster,
+      }),
+    [producers, producerSearch, filterKgb, filterCluster],
   )
   const databaseBrowseGroups = useMemo(
     () => groupProducersByKgb(databaseBrowseList),
@@ -386,22 +416,60 @@ export function DbWorkbenchView() {
     return c.toLowerCase().includes(q)
   })
 
+  const filteredClusterTags = clusterTags.filter(([cluster]) => {
+    const q = producerSearch.toLowerCase()
+    if (!q) return true
+    return cluster.toLowerCase().includes(q)
+  })
+
+  const filterKgbOptions = useMemo(() => {
+    const source = selectedCluster
+      ? producers.filter((p) => clusterFromProducer(p) === selectedCluster)
+      : producers
+    return [...new Set(source.map((p) => p.kgb))].sort((a, b) => a.localeCompare(b))
+  }, [producers, selectedCluster])
+
+  const filterClusterOptions = useMemo(() => {
+    const source = selectedKgb ? producers.filter((p) => p.kgb === selectedKgb) : producers
+    return [...new Set(source.map((p) => clusterFromProducer(p)))].sort((a, b) => a.localeCompare(b))
+  }, [producers, selectedKgb])
+
   const kgbDatabases = useMemo(() => {
     if (!selectedKgb) return []
-    const filtered = producers
-      .filter((p) => p.kgb === selectedKgb)
-      .filter((p) => {
-        const q = producerSearch.toLowerCase()
-        if (!q) return true
-        return (
-          p.dbName.toLowerCase().includes(q) ||
-          p.producer.toLowerCase().includes(q)
-        )
-      })
+    const filtered = applyProducerBrowseFilters(
+      producers.filter((p) => p.kgb === selectedKgb),
+      { cluster: filterCluster },
+    ).filter((p) => {
+      const q = producerSearch.toLowerCase()
+      if (!q) return true
+      return (
+        p.dbName.toLowerCase().includes(q) ||
+        p.producer.toLowerCase().includes(q) ||
+        clusterFromProducer(p).toLowerCase().includes(q)
+      )
+    })
     return dedupeProducersForBrowse(filtered).sort((a, b) => a.dbName.localeCompare(b.dbName))
-  }, [producers, selectedKgb, producerSearch])
+  }, [producers, selectedKgb, producerSearch, filterCluster])
+
+  const clusterDatabases = useMemo(() => {
+    if (!selectedCluster) return []
+    const filtered = applyProducerBrowseFilters(
+      producers.filter((p) => clusterFromProducer(p) === selectedCluster),
+      { kgb: filterKgb },
+    ).filter((p) => {
+      const q = producerSearch.toLowerCase()
+      if (!q) return true
+      return (
+        p.dbName.toLowerCase().includes(q) ||
+        p.producer.toLowerCase().includes(q) ||
+        p.kgb.toLowerCase().includes(q)
+      )
+    })
+    return dedupeProducersForBrowse(filtered).sort((a, b) => a.dbName.localeCompare(b.dbName))
+  }, [producers, selectedCluster, producerSearch, filterKgb])
 
   const kgbDupes = useMemo(() => duplicateDbNames(kgbDatabases), [kgbDatabases])
+  const clusterDupes = useMemo(() => duplicateDbNames(clusterDatabases), [clusterDatabases])
 
   /* ── Connect / Disconnect ── */
 
@@ -777,32 +845,98 @@ export function DbWorkbenchView() {
     )
   }
 
+  function renderDbFilters(showKgbFilter: boolean, showClusterFilter: boolean) {
+    if (!showKgbFilter && !showClusterFilter) return null
+    return (
+      <div className="dbw-picker-filters">
+        {showKgbFilter && (
+          <label className="dbw-picker-filter">
+            <span>KGB</span>
+            <select
+              className="form-input dbw-picker-filter-select"
+              value={filterKgb}
+              onChange={(e) => setFilterKgb(e.target.value)}
+            >
+              <option value="">All KGB tags</option>
+              {filterKgbOptions.map((kgb) => (
+                <option key={kgb} value={kgb}>
+                  {kgb}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {showClusterFilter && (
+          <label className="dbw-picker-filter">
+            <span>Cluster</span>
+            <select
+              className="form-input dbw-picker-filter-select"
+              value={filterCluster}
+              onChange={(e) => setFilterCluster(e.target.value)}
+            >
+              <option value="">All clusters</option>
+              {filterClusterOptions.map((cluster) => (
+                <option key={cluster} value={cluster}>
+                  {cluster}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+    )
+  }
+
   function renderPickerModal() {
-    const showingDatabases = pickerMode === 'kgb' && selectedKgb !== null
+    const showingKgbDatabases = pickerMode === 'kgb' && selectedKgb !== null
+    const showingClusterDatabases = pickerMode === 'cluster' && selectedCluster !== null
+    const showingDatabases = showingKgbDatabases || showingClusterDatabases
     const showingGlobalSearch =
-      pickerMode === 'kgb' && searchActive && !showingDatabases
+      (pickerMode === 'kgb' || pickerMode === 'cluster') && searchActive && !showingDatabases
     const showingDatabaseBrowse = pickerMode === 'database'
+    const showingDbFilters = showingDatabases || showingDatabaseBrowse || showingGlobalSearch
     const globalDupes = duplicateDbNames(globalSearchMatches)
 
     return (
       <div className="modal-overlay" onClick={() => setShowPicker(false)}>
         <div className="dbw-picker-modal" onClick={(e) => e.stopPropagation()}>
           <h2>
-            {showingDatabases ? (
+            {showingKgbDatabases ? (
               <>
                 <button
                   className="dbw-picker-back"
-                  onClick={() => { setSelectedKgb(null); setProducerSearch('') }}
+                  onClick={() => {
+                    setSelectedKgb(null)
+                    setProducerSearch('')
+                    setFilterCluster('')
+                  }}
                   title="Back to KGB tags"
                 >
                   &#8592;
                 </button>
                 {selectedKgb}
               </>
+            ) : showingClusterDatabases ? (
+              <>
+                <button
+                  className="dbw-picker-back"
+                  onClick={() => {
+                    setSelectedCluster(null)
+                    setProducerSearch('')
+                    setFilterKgb('')
+                  }}
+                  title="Back to clusters"
+                >
+                  &#8592;
+                </button>
+                {selectedCluster}
+              </>
             ) : showingGlobalSearch ? (
               'Search Results'
             ) : showingDatabaseBrowse ? (
               'Browse databases'
+            ) : pickerMode === 'cluster' ? (
+              'Select cluster'
             ) : (
               'Select KGB tag'
             )}
@@ -815,9 +949,25 @@ export function DbWorkbenchView() {
               onClick={() => {
                 setPickerMode('kgb')
                 setSelectedKgb(null)
+                setSelectedCluster(null)
+                setFilterKgb('')
+                setFilterCluster('')
               }}
             >
               By KGB
+            </button>
+            <button
+              type="button"
+              className={`dbw-picker-mode-tab ${pickerMode === 'cluster' ? 'active' : ''}`}
+              onClick={() => {
+                setPickerMode('cluster')
+                setSelectedKgb(null)
+                setSelectedCluster(null)
+                setFilterKgb('')
+                setFilterCluster('')
+              }}
+            >
+              By cluster
             </button>
             <button
               type="button"
@@ -825,6 +975,9 @@ export function DbWorkbenchView() {
               onClick={() => {
                 setPickerMode('database')
                 setSelectedKgb(null)
+                setSelectedCluster(null)
+                setFilterKgb('')
+                setFilterCluster('')
               }}
             >
               By database
@@ -837,14 +990,25 @@ export function DbWorkbenchView() {
             type="text"
             placeholder={
               showingDatabaseBrowse
-                ? 'Search database name, producer, or KGB tag...'
-                : showingDatabases
+                ? 'Search database name, cluster, producer, or KGB tag...'
+                : showingKgbDatabases
                   ? 'Search databases in this KGB...'
-                  : 'Search KGB tags or database names...'
+                  : showingClusterDatabases
+                    ? 'Search databases in this cluster...'
+                    : pickerMode === 'cluster'
+                      ? 'Search cluster names or database names...'
+                      : 'Search KGB tags or database names...'
             }
             value={producerSearch}
             onChange={(e) => setProducerSearch(e.target.value)}
           />
+
+          {renderDbFilters(
+            showingDbFilters &&
+              (showingClusterDatabases || showingDatabaseBrowse || showingGlobalSearch),
+            showingDbFilters &&
+              (showingKgbDatabases || showingDatabaseBrowse || showingGlobalSearch),
+          )}
 
           {connectError && (
             <div className="dbw-error-banner" style={{ margin: '0 0 8px' }}>
@@ -899,15 +1063,46 @@ export function DbWorkbenchView() {
                 <div className="dbw-picker-empty">
                   {`No results for "${producerSearch}"`}
                 </div>
+              ) : pickerMode === 'cluster' ? (
+                globalSearchClusterGroups.map(({ cluster, producers: group }) => (
+                  <div key={cluster} className="dbw-picker-group">
+                    <div className="dbw-picker-group-label">{cluster}</div>
+                    {group.map((p) => renderProducerRow(p, globalDupes, true))}
+                  </div>
+                ))
               ) : (
-                globalSearchGroups.map(({ kgb, producers: group }) => (
+                globalSearchKgbGroups.map(({ kgb, producers: group }) => (
                   <div key={kgb} className="dbw-picker-group">
                     <div className="dbw-picker-group-label">{kgb}</div>
                     {group.map((p) => renderProducerRow(p, globalDupes, true))}
                   </div>
                 ))
               )
-            ) : !showingDatabases ? (
+            ) : pickerMode === 'cluster' && !showingClusterDatabases ? (
+              filteredClusterTags.length === 0 ? (
+                <div className="dbw-picker-empty">
+                  {clusterTags.length === 0
+                    ? 'No clusters available'
+                    : `No results for "${producerSearch}"`}
+                </div>
+              ) : (
+                filteredClusterTags.map(([cluster, count]) => (
+                  <button
+                    key={cluster}
+                    className="dbw-picker-item"
+                    onClick={() => {
+                      setSelectedCluster(cluster)
+                      setProducerSearch('')
+                    }}
+                  >
+                    <span className="dbw-picker-db-name">{cluster}</span>
+                    <span className="dbw-picker-db-count">
+                      {count} database{count !== 1 ? 's' : ''}
+                    </span>
+                  </button>
+                ))
+              )
+            ) : pickerMode === 'kgb' && !showingKgbDatabases ? (
               filteredKgbTags.length === 0 ? (
                 <div className="dbw-picker-empty">
                   {kgbTags.length === 0
@@ -921,7 +1116,10 @@ export function DbWorkbenchView() {
                     <button
                       key={kgb}
                       className="dbw-picker-item"
-                      onClick={() => { setSelectedKgb(kgb); setProducerSearch('') }}
+                      onClick={() => {
+                        setSelectedKgb(kgb)
+                        setProducerSearch('')
+                      }}
                     >
                       <span className="dbw-picker-db-name">{kgb}</span>
                       <span className="dbw-picker-db-count">
@@ -930,6 +1128,14 @@ export function DbWorkbenchView() {
                     </button>
                   )
                 })
+              )
+            ) : showingClusterDatabases ? (
+              clusterDatabases.length === 0 ? (
+                <div className="dbw-picker-empty">
+                  {`No results for "${producerSearch}"`}
+                </div>
+              ) : (
+                clusterDatabases.map((p) => renderProducerRow(p, clusterDupes, true))
               )
             ) : kgbDatabases.length === 0 ? (
               <div className="dbw-picker-empty">
