@@ -517,6 +517,26 @@
   display: flex;
   min-width: 0;
   overflow: hidden;
+  position: relative;
+}
+
+.dbw-session-panel {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dbw-session-panel.active {
+  display: flex;
+}
+
+.dbw-results-display-cap {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
 }
 
 /* ── Left Sidebar ── */
@@ -700,6 +720,37 @@
   font-size: 11px;
   color: var(--text-muted);
   padding: 4px 6px;
+}
+
+.dbw-col-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 6px;
+}
+
+.dbw-col-error {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 6px 6px;
+}
+
+.dbw-col-error-text {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.dbw-col-error-detail {
+  font-size: 10px;
+  color: var(--danger, #f87171);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dbw-col-retry-btn {
+  align-self: flex-start;
+  margin-top: 2px;
 }
 
 /* ── Right Panel ── */

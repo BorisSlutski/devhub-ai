@@ -8,6 +8,7 @@ import { BrowserView } from './BrowserView'
 import { PipelineView } from './PipelineView'
 import { SessionInfoBar } from './SessionInfoBar'
 import { ChatInputBar } from './ChatInputBar'
+import { AGENT_PROVIDER_LABELS } from '../../shared/agent-provider'
 import { McpSkillsPanel } from './McpSkillsPanel'
 import { ResourceBadge } from './ResourceBadge'
 import { ResourcePanel } from './ResourcePanel'
@@ -588,6 +589,9 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
                     className={`sidebar-status-dot ${isExited ? 'exited' : isWaiting ? 'waiting' : 'active'}`}
                     style={!isExited && !isWaiting ? { background: accent, boxShadow: `0 0 6px ${accent}` } : undefined}
                   />
+                  <span className="sidebar-provider-badge" title={`${AGENT_PROVIDER_LABELS[session.provider ?? 'claude']} session`}>
+                    {AGENT_PROVIDER_LABELS[session.provider ?? 'claude']}
+                  </span>
                   {editingNicknameId === session.id ? (
                     <input
                       className="sidebar-nickname-input"
@@ -789,7 +793,7 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
                     toolbarRef={splitPaneToolbarRef}
                     onNewSession={onNewSession}
                   />
-                  {chatInputEnabled && !activeSession.exited && (
+                  {chatInputEnabled && !activeSession.exited && (activeSession.provider ?? 'claude') === 'claude' && (
                     <ChatInputBar
                       sessionId={activeSession.id}
                       rootPath={activeSession.worktreePath || activeSession.folderPath}

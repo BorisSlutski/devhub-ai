@@ -5,25 +5,62 @@ import {
   dedupeProducersForBrowse,
   groupProducersByKgb,
   groupProducersByCluster,
-  clusterFromProducer,
+  parseProducerPathFields,
+  producerCluster,
   applyProducerBrowseFilters,
   duplicateDbNames,
   shouldShowProducerSubtitle,
   type DbProducerPicker,
 } from './db-picker'
 
+const REAL_PATH =
+  '/prod/dba/developer-access/mysql/kgb-aglianico/editor_services/locality_common_us/db-mysql-locality-common-us2a.42-config_service'
+
 const producers: DbProducerPicker[] = [
-  { name: '/p/a', kgb: 'kgb-a', producer: 'host-a', dbName: 'mydb', type: 'mysql' },
-  { name: '/p/b', kgb: 'kgb-a', producer: 'host-b', dbName: 'mydb', type: 'mysql' },
-  { name: '/p/c', kgb: 'kgb-b', producer: 'host-c', dbName: 'other', type: 'mysql' },
   {
-    name: '/p/d',
+    name: '/prod/dba/developer-access/mysql/kgb-a/host-a/host-a/p-host-a',
     kgb: 'kgb-a',
+    cluster: 'host-a',
+    producer: 'p-host-a',
+    dbName: 'mydb',
+    type: 'mysql',
+  },
+  {
+    name: '/prod/dba/developer-access/mysql/kgb-a/host-b/host-b/p-host-b',
+    kgb: 'kgb-a',
+    cluster: 'host-b',
+    producer: 'p-host-b',
+    dbName: 'mydb',
+    type: 'mysql',
+  },
+  {
+    name: '/prod/dba/developer-access/mysql/kgb-b/other/other/p-other',
+    kgb: 'kgb-b',
+    cluster: 'other',
+    producer: 'p-other',
+    dbName: 'other',
+    type: 'mysql',
+  },
+  {
+    name: '/prod/dba/developer-access/mysql/kgb-a/billing/billing/db-mysql-billing0a.42-wix_billing',
+    kgb: 'kgb-a',
+    cluster: 'billing',
     producer: 'db-mysql-billing0a.42-wix_billing',
     dbName: 'wix_billing',
     type: 'mysql',
   },
 ]
+
+describe('parseProducerPathFields', () => {
+  it('reads cluster from the last folder before the producer leaf', () => {
+    expect(parseProducerPathFields(REAL_PATH)).toEqual({
+      kgb: 'kgb-aglianico',
+      cluster: 'locality_common_us',
+      producer: 'db-mysql-locality-common-us2a.42-config_service',
+      dbName: 'config_service',
+    })
+  })
+})
 
 describe('filterProducers', () => {
   it('returns empty for blank query', () => {
@@ -42,22 +79,32 @@ describe('filterProducers', () => {
   })
 
   it('matches producer leaf', () => {
-    expect(filterProducers(producers, 'host-b')).toHaveLength(1)
+    expect(filterProducers(producers, 'p-host-b')).toHaveLength(1)
   })
 
-  it('matches cluster id derived from producer leaf', () => {
-    expect(filterProducers(producers, 'billing0a')).toHaveLength(1)
+  it('matches Akeyless cluster folder name', () => {
+    expect(filterProducers(producers, 'locality_common_us')).toHaveLength(0)
+    expect(filterProducers(producers, 'billing')).toHaveLength(1)
   })
 })
 
-describe('clusterFromProducer', () => {
-  it('strips db name suffix from producer leaf', () => {
-    expect(clusterFromProducer(producers[3])).toBe('db-mysql-billing0a.42')
+describe('producerCluster', () => {
+  it('uses the cluster field when present', () => {
+    expect(producerCluster(producers[3])).toBe('billing')
+  })
+
+  it('falls back to parsing the path when cluster is missing', () => {
+    expect(
+      producerCluster({
+        name: REAL_PATH,
+        cluster: '',
+      }),
+    ).toBe('locality_common_us')
   })
 })
 
 describe('groupProducersByCluster', () => {
-  it('groups and sorts by cluster id', () => {
+  it('groups and sorts by cluster folder', () => {
     const groups = groupProducersByCluster(filterProducers(producers, 'mydb'))
     expect(groups.map((g) => g.cluster)).toEqual(['host-a', 'host-b'])
     expect(groups[0].producers).toHaveLength(1)
@@ -71,7 +118,7 @@ describe('applyProducerBrowseFilters', () => {
       cluster: 'host-a',
     })
     expect(filtered).toHaveLength(1)
-    expect(filtered[0].producer).toBe('host-a')
+    expect(filtered[0].producer).toBe('p-host-a')
   })
 })
 
@@ -94,9 +141,30 @@ describe('duplicateDbNames', () => {
 describe('dedupeProducersForBrowse', () => {
   it('collapses identical browse keys to one row', () => {
     const dupes: DbProducerPicker[] = [
-      { name: '/prod/.../long-path/cronulla', kgb: 'kgb-a', producer: 'loc', dbName: 'cronulla', type: 'mysql' },
-      { name: '/p/a', kgb: 'kgb-a', producer: 'loc', dbName: 'cronulla', type: 'mysql' },
-      { name: '/p/b', kgb: 'kgb-a', producer: 'loc', dbName: 'cronulla', type: 'mysql' },
+      {
+        name: '/prod/.../long-path/cronulla',
+        kgb: 'kgb-a',
+        cluster: 'internal_services',
+        producer: 'loc',
+        dbName: 'cronulla',
+        type: 'mysql',
+      },
+      {
+        name: '/p/a',
+        kgb: 'kgb-a',
+        cluster: 'internal_services',
+        producer: 'loc',
+        dbName: 'cronulla',
+        type: 'mysql',
+      },
+      {
+        name: '/p/b',
+        kgb: 'kgb-a',
+        cluster: 'internal_services',
+        producer: 'loc',
+        dbName: 'cronulla',
+        type: 'mysql',
+      },
     ]
     const list = dedupeProducersForBrowse(dupes)
     expect(list).toHaveLength(1)
@@ -105,8 +173,22 @@ describe('dedupeProducersForBrowse', () => {
 
   it('keeps rows that differ by producer leaf', () => {
     const list = dedupeProducersForBrowse([
-      { name: '/p/1', kgb: 'kgb-a', producer: 'loc_a', dbName: 'domain_audit', type: 'mysql' },
-      { name: '/p/2', kgb: 'kgb-a', producer: 'loc_b', dbName: 'domain_audit', type: 'mysql' },
+      {
+        name: '/p/1',
+        kgb: 'kgb-a',
+        cluster: 'domains',
+        producer: 'loc_a',
+        dbName: 'domain_audit',
+        type: 'mysql',
+      },
+      {
+        name: '/p/2',
+        kgb: 'kgb-a',
+        cluster: 'domains',
+        producer: 'loc_b',
+        dbName: 'domain_audit',
+        type: 'mysql',
+      },
     ])
     expect(list).toHaveLength(2)
   })

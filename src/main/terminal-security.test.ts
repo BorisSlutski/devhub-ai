@@ -2,13 +2,14 @@
  * @vitest-environment node
  */
 import { describe, it, expect } from 'vitest'
+import { buildAgentCommand } from './agent-commands'
 
 // ---------------------------------------------------------------------------
 // Helper functions that mirror main process logic (for pure unit testing)
 // ---------------------------------------------------------------------------
 
-/** Valid session IDs match: claude- + base36 timestamp (lowercase alphanumeric) */
-const VALID_SESSION_ID_PATTERN = /^claude-[a-z0-9]+$/
+/** Valid session IDs match: {provider}- + base36 timestamp (lowercase alphanumeric) */
+const VALID_SESSION_ID_PATTERN = /^(claude|cursor|codex|shell)-[a-z0-9-]+$/
 
 /**
  * Validates that a session ID is safe for use in file paths and IPC.
@@ -31,20 +32,12 @@ function slugifyFolderName(folderName: string): string {
   return folderName.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()
 }
 
-/**
- * Builds the claude command string as the pty-create handler does.
- * Mirrors index.ts: permFlag = opts.dangerousMode ? ' --dangerously-skip-permissions' : ''
- * command = claude${permFlag} or claude --resume <id>${permFlag}
- */
+/** @deprecated use buildAgentCommand — kept as alias for existing tests */
 function buildClaudeCommand(opts: {
   resumeClaudeId?: string
   dangerousMode?: boolean
 }): string {
-  const permFlag = opts.dangerousMode ? ' --dangerously-skip-permissions' : ''
-  if (opts.resumeClaudeId) {
-    return `claude --resume ${opts.resumeClaudeId}${permFlag}`
-  }
-  return `claude${permFlag}`
+  return buildAgentCommand({ provider: 'claude', ...opts })
 }
 
 /**

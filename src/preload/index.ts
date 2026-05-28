@@ -279,6 +279,8 @@ const api = {
   systemCheck: (): Promise<{
     node: { ok: boolean; version: string | null }
     claude: { ok: boolean; version: string | null }
+    cursor: { ok: boolean; version: string | null }
+    codex: { ok: boolean; version: string | null }
     git: { ok: boolean; version: string | null }
   }> => ipcRenderer.invoke('system-check'),
 
@@ -412,9 +414,13 @@ const api = {
     columns: any[]; rows: any[][]; rowCount: number;
     affectedRows: number; executionTimeMs: number; error?: string;
   }> => ipcRenderer.invoke('db-execute-query', connectionId, sql),
-  dbListTables: (connectionId: string): Promise<{
+  dbCancelQuery: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('db-cancel-query', connectionId),
+  dbReconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('db-reconnect', connectionId),
+  dbListTables: (connectionId: string, forceRefresh?: boolean): Promise<{
     success: boolean; tables: any[]; error?: string;
-  }> => ipcRenderer.invoke('db-list-tables', connectionId),
+  }> => ipcRenderer.invoke('db-list-tables', connectionId, forceRefresh),
   dbDescribeTable: (connectionId: string, tableName: string): Promise<{
     success: boolean; columns: any[]; error?: string;
   }> => ipcRenderer.invoke('db-describe-table', connectionId, tableName),

@@ -2,6 +2,8 @@ export interface DbProducerPicker {
   name: string
   /** KGB ownership tag from the Akeyless path (e.g. kgb-aglianico). */
   kgb: string
+  /** Akeyless folder cluster — last path segment before the producer leaf (e.g. locality_common_us). */
+  cluster: string
   /** Akeyless producer leaf / host routing id — not the MySQL database name. */
   producer: string
   /** MySQL/Mongo schema name. */
@@ -9,13 +11,40 @@ export interface DbProducerPicker {
   type: 'mysql' | 'mongo'
 }
 
-/** Host/cluster id from producer leaf (leaf minus db name suffix). */
-export function clusterFromProducer(p: Pick<DbProducerPicker, 'producer' | 'dbName'>): string {
-  const suffix = `-${p.dbName}`
-  if (p.producer.endsWith(suffix)) {
-    return p.producer.slice(0, -suffix.length)
-  }
-  return p.producer
+/** e.g. pdb-mysql-billing0a.42-wix_billing → wix_billing */
+function dbNameFromLeaf(leaf: string): string {
+  const dotted = leaf.match(/\.[\da-z.]+-(.+)$/i)
+  if (dotted) return dotted[1]
+  const dashed = leaf.match(/-([a-z0-9_]+)$/i)
+  return dashed ? dashed[1] : leaf
+}
+
+/**
+ * Parse KGB, cluster folder, producer leaf, and db name from a full Akeyless path.
+ * Path: /prod/dba/developer-access/mysql/<kgb-tag>/<...>/<cluster-folder>/<producer-leaf>
+ */
+export function parseProducerPathFields(name: string): Pick<
+  DbProducerPicker,
+  'kgb' | 'cluster' | 'producer' | 'dbName'
+> {
+  const parts = name.split('/').filter(Boolean)
+  const typeIdx = parts.findIndex((p) => p === 'mysql' || p === 'mongo')
+  const kgb = typeIdx >= 0 ? (parts[typeIdx + 1] ?? '') : ''
+  const leaf = parts[parts.length - 1] ?? ''
+  const mid = typeIdx >= 0 ? parts.slice(typeIdx + 2, -1) : []
+  const cluster = mid.length > 0 ? mid[mid.length - 1] : ''
+  return { kgb, cluster, producer: leaf, dbName: dbNameFromLeaf(leaf) }
+}
+
+/** Cluster folder name for browse/filter — parsed from path when missing on cached rows. */
+export function producerCluster(p: Pick<DbProducerPicker, 'name' | 'cluster'>): string {
+  if (p.cluster) return p.cluster
+  return parseProducerPathFields(p.name).cluster
+}
+
+/** @deprecated Use producerCluster — kept for callers that still import this name. */
+export function clusterFromProducer(p: Pick<DbProducerPicker, 'name' | 'cluster'>): string {
+  return producerCluster(p)
 }
 
 function matchesProducerQuery(p: DbProducerPicker, q: string): boolean {
@@ -23,7 +52,7 @@ function matchesProducerQuery(p: DbProducerPicker, q: string): boolean {
     p.dbName.toLowerCase().includes(q) ||
     p.producer.toLowerCase().includes(q) ||
     p.kgb.toLowerCase().includes(q) ||
-    clusterFromProducer(p).toLowerCase().includes(q) ||
+    producerCluster(p).toLowerCase().includes(q) ||
     p.name.toLowerCase().includes(q)
   )
 }
@@ -51,7 +80,7 @@ export function dedupeProducersForBrowse(producers: DbProducerPicker[]): DbProdu
   return Array.from(byKey.values()).map(pickCanonicalProducer)
 }
 
-/** Filter by db name, producer leaf, KGB tag, or full path. Empty query returns []. */
+/** Filter by db name, producer leaf, KGB tag, cluster folder, or full path. Empty query returns []. */
 export function filterProducers(producers: DbProducerPicker[], query: string): DbProducerPicker[] {
   const q = query.trim().toLowerCase()
   if (!q) return []
@@ -79,7 +108,7 @@ export function applyProducerBrowseFilters(
   if (!kgb && !cluster) return producers
   return producers.filter((p) => {
     if (kgb && p.kgb !== kgb) return false
-    if (cluster && clusterFromProducer(p) !== cluster) return false
+    if (cluster && producerCluster(p) !== cluster) return false
     return true
   })
 }
@@ -89,7 +118,8 @@ export function groupProducersByCluster(
 ): { cluster: string; producers: DbProducerPicker[] }[] {
   const byCluster = new Map<string, DbProducerPicker[]>()
   for (const p of producers) {
-    const cluster = clusterFromProducer(p)
+    const cluster = producerCluster(p)
+    if (!cluster) continue
     const list = byCluster.get(cluster) ?? []
     list.push(p)
     byCluster.set(cluster, list)

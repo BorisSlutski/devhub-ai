@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { WorkspaceFolder } from '../../shared/types'
+import { AGENT_PROVIDERS, AGENT_PROVIDER_LABELS, type AgentProvider } from '../../shared/agent-provider'
 import { PresetEditor } from './presets'
 import './NewSessionModal.css'
 
 interface Props {
   scanPath: string
-  onStart: (folder: WorkspaceFolder, useWorktree: boolean) => void
+  onStart: (folder: WorkspaceFolder, useWorktree: boolean, provider: AgentProvider) => void
   onClose: () => void
 }
 
@@ -13,6 +14,7 @@ export function NewSessionModal({ scanPath, onStart, onClose }: Props) {
   const [folders, setFolders] = useState<WorkspaceFolder[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [provider, setProvider] = useState<AgentProvider>('claude')
   const [useWorktree, setUseWorktree] = useState(false)
   const [showSavePreset, setShowSavePreset] = useState(false)
   const [selectedFolder, setSelectedFolder] = useState<WorkspaceFolder | null>(null)
@@ -29,7 +31,7 @@ export function NewSessionModal({ scanPath, onStart, onClose }: Props) {
     if (selected) {
       const name = selected.split('/').filter(Boolean).pop() || selected
       const folder = { name, path: selected } as WorkspaceFolder
-      onStart(folder, useWorktree)
+      onStart(folder, useWorktree, provider)
     }
   }
 
@@ -46,13 +48,27 @@ export function NewSessionModal({ scanPath, onStart, onClose }: Props) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 500, display: 'flex', flexDirection: 'column' }}>
         <h2 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          New Claude Session
+          New Session
           <button
             className="btn btn-sm"
             onClick={onClose}
             style={{ fontSize: 16, lineHeight: 1, padding: '2px 8px' }}
           >x</button>
         </h2>
+        <div className="new-session-provider-row" role="radiogroup" aria-label="Agent provider">
+          {AGENT_PROVIDERS.map((p) => (
+            <label key={p} className={`new-session-provider-option${provider === p ? ' active' : ''}`}>
+              <input
+                type="radio"
+                name="session-provider"
+                value={p}
+                checked={provider === p}
+                onChange={() => setProvider(p)}
+              />
+              {AGENT_PROVIDER_LABELS[p]}
+            </label>
+          ))}
+        </div>
         <input
           className="search-input"
           placeholder="Filter folders..."
@@ -101,7 +117,7 @@ export function NewSessionModal({ scanPath, onStart, onClose }: Props) {
               >
                 <div
                   style={{ flex: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}
-                  onClick={() => onStart(folder, useWorktree)}
+                  onClick={() => onStart(folder, useWorktree, provider)}
                 >
                   <span className="new-session-folder-name">{folder.name}</span>
                   <span className="new-session-folder-path">{folder.path}</span>

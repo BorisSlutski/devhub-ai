@@ -11,6 +11,8 @@ import {
   ptyGetSessions,
 } from '../pty-backend'
 import { runSystemCheck } from '../system-check'
+import { buildAgentCommand, worktreeBranchPrefix } from '../agent-commands'
+import { normalizeAgentProvider, type AgentProvider } from '../../shared/agent-provider'
 import { checkForUpdates, downloadUpdate, getUpdateStatus, installUpdate } from '../updater'
 import { loadState } from '../store'
 import { cleanupSessionRtkFlag } from '../rtk-manager'
@@ -96,11 +98,13 @@ export function registerSessionHandlers() {
     folderName: string
     folderPath: string
     useWorktree: boolean
+    provider?: AgentProvider
     resumeClaudeId?: string
     existingWorktreePath?: string
     dangerousMode?: boolean
     model?: string
   }) => {
+    const provider = normalizeAgentProvider(opts.provider)
     const tracker = workspaceInitTracker.create(opts.sessionId)
     tracker.advance('pending', 'Initializing workspace...')
 
@@ -138,7 +142,7 @@ export function registerSessionHandlers() {
           const slug = opts.folderName.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()
           const worktreeBase = join(homedir(), '.devhub-ai', 'worktrees', slug)
           worktreePath = join(worktreeBase, timestamp, 'worktree')
-          branchName = `devhub-ai/claude-${slug}-${timestamp}`
+          branchName = `${worktreeBranchPrefix(provider)}${slug}-${timestamp}`
 
           mkdirSync(join(worktreeBase, timestamp), { recursive: true })
 
@@ -204,12 +208,12 @@ export function registerSessionHandlers() {
       return { success: false, error: 'Cancelled' }
     }
 
-    const permFlag = opts.dangerousMode ? ' --dangerously-skip-permissions' : ''
-    const modelFlag = opts.model ? ` --model ${opts.model}` : ''
-    let command = `claude${modelFlag}${permFlag}`
-    if (opts.resumeClaudeId) {
-      command = `claude --resume ${opts.resumeClaudeId}${modelFlag}${permFlag}`
-    }
+    const command = buildAgentCommand({
+      provider,
+      resumeClaudeId: opts.resumeClaudeId,
+      dangerousMode: opts.dangerousMode,
+      model: opts.model,
+    })
 
     const result = await ptyCreateSession(
       opts.sessionId,

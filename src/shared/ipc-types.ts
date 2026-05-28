@@ -4,6 +4,7 @@
  */
 
 import { AppState, ProcessStatus, Project, WorkspaceFolder } from './types'
+import type { AgentProvider } from './agent-provider'
 import { AgentInfo } from './agent-types'
 import { PipelineRun, PipelineConfig } from './pipeline-types'
 import { EnhancerConfig, EnhanceResult, EnhancerSessionCost } from './enhancer-types'
@@ -119,6 +120,7 @@ export interface PtyCreateOptions {
   folderName: string
   folderPath: string
   useWorktree: boolean
+  provider?: AgentProvider
   resumeClaudeId?: string
   existingWorktreePath?: string
   dangerousMode?: boolean
@@ -217,6 +219,7 @@ export interface BrowserEvent {
 
 export interface ActiveSession {
   id: string
+  provider?: AgentProvider
   claudeSessionId: string | null
   folderName: string
   folderPath: string

@@ -4,6 +4,8 @@ import './SetupWizard.css'
 interface SystemCheckResult {
   node: { ok: boolean; version: string | null }
   claude: { ok: boolean; version: string | null }
+  cursor: { ok: boolean; version: string | null }
+  codex: { ok: boolean; version: string | null }
   git: { ok: boolean; version: string | null }
 }
 
@@ -29,7 +31,7 @@ export function SetupWizard({ onDismiss }: Props) {
       <div className="setup-wizard">
         <h2 id="setup-wizard-title">Welcome to DevHub-AI</h2>
         <p className="setup-wizard-lead">
-          Quick check that your machine is ready for Claude Code sessions.
+          Quick check that your machine is ready for embedded agent sessions.
         </p>
         {loading && <p className="setup-wizard-muted">Checking…</p>}
         {check && (
@@ -41,6 +43,14 @@ export function SetupWizard({ onDismiss }: Props) {
             <li className={check.claude.ok ? 'ok' : 'fail'}>
               <span>Claude Code CLI</span>
               <span>{check.claude.ok ? check.claude.version : 'Run: npm install -g @anthropic-ai/claude-code'}</span>
+            </li>
+            <li className={check.cursor.ok ? 'ok' : 'optional'}>
+              <span>Cursor CLI</span>
+              <span>{check.cursor.ok ? check.cursor.version : 'Optional — for Cursor Agent sessions'}</span>
+            </li>
+            <li className={check.codex.ok ? 'ok' : 'optional'}>
+              <span>Codex CLI</span>
+              <span>{check.codex.ok ? check.codex.version : 'Optional — for Codex sessions'}</span>
             </li>
             <li className={check.git.ok ? 'ok' : 'optional'}>
               <span>Git</span>

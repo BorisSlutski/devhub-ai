@@ -6,6 +6,14 @@
  * and returned in structured result objects rather than thrown.
  */
 
+import { coalesceInflight } from './describe-inflight-coalesce'
+import { capUnboundedSelect } from '../shared/sql-limit'
+import {
+  buildTunnelOptimizedStarSelect,
+  isLargeColumnType,
+  parseStarSelectPreview,
+} from '../shared/sql-star-preview'
+
 // Use eval require to prevent Vite from bundling the native module.
 // Same pattern as pty-manager.ts.
 // eslint-disable-next-line no-eval
@@ -25,6 +33,8 @@ export interface QueryResult {
   /** True when we appended LIMIT because the query had none. */
   rowCapApplied?: boolean
   truncated?: boolean
+  /** True when SELECT * preview was rewritten to cap large columns on the server. */
+  tunnelOptimized?: boolean
 }
 
 export interface ColumnDef {
@@ -63,12 +73,17 @@ export interface DbConnection {
 // ---------------------------------------------------------------------------
 
 const MAX_ROWS = 10_000
+const MAX_CELL_CHARS = 2_048
 const CONNECT_TIMEOUT_MS = 10_000
 /** Metadata (SHOW TABLES, etc.) over SSH tunnels. */
-const QUERY_TIMEOUT_MS = 30_000
+const QUERY_TIMEOUT_MS = 45_000
 /** User SQL — long enough for analytics, short enough to fail visibly. */
 const EXEC_QUERY_TIMEOUT_MS = 90_000
-const PING_TIMEOUT_MS = 5_000
+const PING_TIMEOUT_MS = 2_000
+/** Skip pre-query ping when the connection was used recently. */
+const PING_IDLE_THRESHOLD_MS = 45_000
+/** Reuse SHOW FULL TABLES results — avoids HMR / tab churn hammering the tunnel. */
+const TABLES_LIST_CACHE_TTL_MS = 5 * 60 * 1000
 
 // ---------------------------------------------------------------------------
 // MySQL field-type code to human-readable name mapping
@@ -115,8 +130,10 @@ async function queryWithTimeout(
   sql: string,
   params?: unknown[],
   timeoutMs = QUERY_TIMEOUT_MS,
+  onTimeout?: () => void,
 ): Promise<[unknown, unknown]> {
   let timer: ReturnType<typeof setTimeout> | undefined
+  let timedOut = false
   try {
     const queryPromise =
       params !== undefined ? connection.query(sql, params) : connection.query(sql)
@@ -124,13 +141,68 @@ async function queryWithTimeout(
       queryPromise,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          timedOut = true
           reject(new Error(`Query timed out after ${Math.round(timeoutMs / 1000)}s`))
         }, timeoutMs)
       }),
     ])) as [unknown, unknown]
+  } catch (err) {
+    if (timedOut) {
+      onTimeout?.()
+      try {
+        connection.destroy()
+      } catch {
+        // best effort — free the socket so the next query can reconnect
+      }
+    }
+    throw err
   } finally {
     if (timer) clearTimeout(timer)
   }
+}
+
+async function pingIfIdle(entry: ConnectionEntry): Promise<void> {
+  const idleMs = Date.now() - entry.lastActivityAt
+  if (idleMs < PING_IDLE_THRESHOLD_MS) return
+  await Promise.race([
+    entry.queryConn.ping(),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`Connection ping timed out after ${PING_TIMEOUT_MS / 1000}s`)), PING_TIMEOUT_MS)
+    }),
+  ])
+}
+
+function columnCacheKey(database: string, table: string): string {
+  return `${database}\0${table}`
+}
+
+function previewSql(sql: string, max = 120): string {
+  const oneLine = sql.replace(/\s+/g, ' ').trim()
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}…`
+}
+
+async function createMysqlConnection(
+  host: string,
+  port: number,
+  user: string,
+  password: string,
+  database: string,
+): Promise<any> {
+  const connection = await mysql.createConnection({
+    host,
+    port,
+    user,
+    password,
+    database,
+    connectTimeout: CONNECT_TIMEOUT_MS,
+    multipleStatements: false,
+    rowsAsArray: true,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10_000,
+    compress: true,
+  })
+  await connection.ping()
+  return connection
 }
 
 /** Row from SHOW FULL TABLES: [name, BASE TABLE|VIEW] (rowsAsArray) or named fields. */
@@ -152,8 +224,25 @@ function parseShowFullTablesRow(r: any, database: string): [string, string] {
 // ---------------------------------------------------------------------------
 
 interface ConnectionEntry {
-  connection: any // mysql2 Connection (typed as any to stay decoupled from runtime types)
+  /** User SQL — isolated from metadata so SHOW TABLES cannot block SELECT. */
+  queryConn: any
+  /** SHOW TABLES / DESCRIBE — timeouts here do not kill the query socket. */
+  metaConn: any
   meta: DbConnection
+  password: string
+  host: string
+  port: number
+  lastActivityAt: number
+  queryInFlight: boolean
+  /** Bumped on cancel/reconnect so in-flight executeQuery does not drop the new socket. */
+  generation: number
+  columnCache: Map<string, ColumnInfo[]>
+  tablesListCache: { database: string; tables: TableInfo[]; at: number } | null
+  listTablesInFlight: Promise<TableInfo[]> | null
+  /** Coalesce concurrent DESCRIBE for the same table on this connection. */
+  describeInFlight: Map<string, Promise<ColumnInfo[]>>
+  /** Serialize metadata queries — prevents HMR from stacking concurrent SHOW TABLES. */
+  metaQueryChain: Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +251,97 @@ interface ConnectionEntry {
 
 class MysqlClient {
   private connections: Map<string, ConnectionEntry> = new Map()
+
+  private withMetaLock<T>(entry: ConnectionEntry, fn: () => Promise<T>): Promise<T> {
+    const run = entry.metaQueryChain.then(fn, fn)
+    entry.metaQueryChain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  private async ensureMetaReady(entry: ConnectionEntry): Promise<void> {
+    await this.withMetaLock(entry, async () => {
+      try {
+        await Promise.race([
+          entry.metaConn.ping(),
+          new Promise<never>((_, reject) => {
+            setTimeout(
+              () => reject(new Error(`Metadata ping timed out after ${PING_TIMEOUT_MS / 1000}s`)),
+              PING_TIMEOUT_MS,
+            )
+          }),
+        ])
+      } catch {
+        await this.replaceMetaConnection(entry)
+      }
+    })
+  }
+
+  private async replaceMetaConnection(entry: ConnectionEntry): Promise<void> {
+    try {
+      entry.metaConn.destroy()
+    } catch {
+      // ignore
+    }
+    entry.metaConn = await createMysqlConnection(
+      entry.host,
+      entry.port,
+      entry.meta.user,
+      entry.password,
+      entry.meta.database,
+    )
+  }
+
+  private async replaceQueryConnection(entry: ConnectionEntry): Promise<void> {
+    try {
+      entry.queryConn.destroy()
+    } catch {
+      // ignore
+    }
+    entry.queryConn = await createMysqlConnection(
+      entry.host,
+      entry.port,
+      entry.meta.user,
+      entry.password,
+      entry.meta.database,
+    )
+    entry.lastActivityAt = Date.now()
+  }
+
+  private async queryMeta(entry: ConnectionEntry, sql: string, params?: unknown[]): Promise<[unknown, unknown]> {
+    await this.ensureMetaReady(entry)
+    return this.withMetaLock(entry, async () => {
+      try {
+        return await queryWithTimeout(entry.metaConn, sql, params, QUERY_TIMEOUT_MS, () => {
+          // Sync replace so the next queued metadata query uses a fresh socket.
+          void this.replaceMetaConnection(entry)
+        })
+      } catch (err: any) {
+        if (isConnectionLostError(err)) {
+          try {
+            await this.replaceMetaConnection(entry)
+          } catch {
+            // metadata path failed; query socket may still work
+          }
+        }
+        throw err
+      }
+    })
+  }
+
+  private async getCachedColumns(
+    entry: ConnectionEntry,
+    table: string,
+    database: string,
+  ): Promise<ColumnInfo[]> {
+    const key = columnCacheKey(database, table)
+    const cached = entry.columnCache.get(key)
+    if (cached) return cached
+    const cols = await this.describeTable(entry.meta.id, table, database)
+    return cols
+  }
 
   /**
    * Connect to a MySQL server. After a successful TCP + auth handshake the
@@ -180,21 +360,10 @@ class MysqlClient {
       await this.disconnect(id)
     }
 
-    const connection = await mysql.createConnection({
-      host,
-      port,
-      user,
-      password,
-      database,
-      connectTimeout: CONNECT_TIMEOUT_MS,
-      multipleStatements: false,
-      rowsAsArray: true,
-      enableKeepAlive: true,
-      keepAliveInitialDelay: 10_000,
-    })
-
-    // Verify the connection is alive.
-    await connection.ping()
+    const [queryConn, metaConn] = await Promise.all([
+      createMysqlConnection(host, port, user, password, database),
+      createMysqlConnection(host, port, user, password, database),
+    ])
 
     const meta: DbConnection = {
       id,
@@ -205,7 +374,22 @@ class MysqlClient {
       connected: true
     }
 
-    this.connections.set(id, { connection, meta })
+    this.connections.set(id, {
+      queryConn,
+      metaConn,
+      meta,
+      password,
+      host,
+      port,
+      lastActivityAt: Date.now(),
+      queryInFlight: false,
+      generation: 0,
+      columnCache: new Map(),
+      tablesListCache: null,
+      listTablesInFlight: null,
+      describeInFlight: new Map(),
+      metaQueryChain: Promise.resolve(),
+    })
 
     return { ...meta }
   }
@@ -220,11 +404,10 @@ class MysqlClient {
     entry.meta.connected = false
     this.connections.delete(id)
 
-    try {
-      await entry.connection.end()
-    } catch {
-      // Best-effort — the connection may already be dead.
-    }
+    await Promise.allSettled([
+      entry.queryConn.end().catch(() => undefined),
+      entry.metaConn.end().catch(() => undefined),
+    ])
   }
 
   /**
@@ -249,17 +432,55 @@ class MysqlClient {
     }
 
     const start = performance.now()
+    const generationAtStart = entry.generation
+    let pingMs = 0
+    let schemaMs = 0
+    let tunnelOptimized = false
 
     try {
-      await queryWithTimeout(entry.connection, 'SELECT 1', undefined, PING_TIMEOUT_MS)
+      const pingStart = performance.now()
+      await pingIfIdle(entry)
+      pingMs = Math.round((performance.now() - pingStart) * 100) / 100
+      entry.queryInFlight = true
 
-      const { sql: execSql, rowCapApplied } = capUnboundedSelect(sql, MAX_ROWS)
+      const { sql: cappedSql, rowCapApplied } = capUnboundedSelect(sql, MAX_ROWS)
+      let execSql = cappedSql
+
+      const preview = parseStarSelectPreview(cappedSql)
+      if (preview) {
+        const db = preview.database ?? entry.meta.database
+        const schemaStart = performance.now()
+        const columns = await this.getCachedColumns(entry, preview.table, db)
+        schemaMs = Math.round((performance.now() - schemaStart) * 100) / 100
+        if (columns.some((c) => isLargeColumnType(c.type))) {
+          execSql = buildTunnelOptimizedStarSelect(
+            (ident) => entry.queryConn.escapeId(ident),
+            preview.database,
+            preview.table,
+            columns,
+            preview.limit,
+          )
+          tunnelOptimized = true
+        }
+      }
+
+      const queryStart = performance.now()
       const [result, fields] = await queryWithTimeout(
-        entry.connection,
+        entry.queryConn,
         execSql,
         undefined,
         EXEC_QUERY_TIMEOUT_MS,
+        () => {
+          void this.replaceQueryConnection(entry).catch(() => undefined)
+        },
       )
+      const queryMs = Math.round((performance.now() - queryStart) * 100) / 100
+
+      if (entry.generation !== generationAtStart) {
+        return { ...empty, error: 'Query cancelled' }
+      }
+      entry.lastActivityAt = Date.now()
+      entry.queryInFlight = false
       const executionTimeMs = Math.round((performance.now() - start) * 100) / 100
 
       if (Array.isArray(result)) {
@@ -268,12 +489,18 @@ class MysqlClient {
           type: fieldTypeName(f.columnType ?? f.type ?? 0),
         }))
 
-        let rows = result as any[][]
+        const sanitizeStart = performance.now()
+        let rows = (result as any[][]).map((row) => row.map(sanitizeCellForIpc))
+        const sanitizeMs = Math.round((performance.now() - sanitizeStart) * 100) / 100
         let truncated = false
         if (rows.length > MAX_ROWS) {
           rows = rows.slice(0, MAX_ROWS)
           truncated = true
         }
+
+        console.log(
+          `[mysql-client] query ok id=${id} total=${executionTimeMs}ms ping=${pingMs}ms schema=${schemaMs}ms mysql=${queryMs}ms sanitize=${sanitizeMs}ms rows=${rows.length} optimized=${tunnelOptimized} sql=${previewSql(sql)}`,
+        )
 
         return {
           columns,
@@ -283,8 +510,13 @@ class MysqlClient {
           executionTimeMs,
           rowCapApplied,
           truncated,
+          tunnelOptimized,
         }
       }
+
+      console.log(
+        `[mysql-client] query ok id=${id} total=${executionTimeMs}ms ping=${pingMs}ms mysql=${queryMs}ms affected=${(result as any).affectedRows ?? 0} sql=${previewSql(sql)}`,
+      )
 
       return {
         columns: [],
@@ -294,17 +526,30 @@ class MysqlClient {
         executionTimeMs,
       }
     } catch (err: any) {
+      if (entry.generation === generationAtStart) {
+        entry.queryInFlight = false
+      }
       const executionTimeMs = Math.round((performance.now() - start) * 100) / 100
       const msg = err?.message ?? String(err)
 
-      if (/timed out/i.test(msg) || isConnectionLostError(err)) {
+      if (
+        entry.generation === generationAtStart &&
+        (/timed out/i.test(msg) || isConnectionLostError(err))
+      ) {
         entry.meta.connected = false
-        this.connections.delete(id)
         try {
-          await entry.connection.destroy()
+          entry.queryConn.destroy()
         } catch {
-          // best effort — free the tunnel port for a reconnect
+          // keep entry + credentials so ensureDbConnection can reopen the socket
         }
+      }
+
+      console.error(
+        `[mysql-client] query failed id=${id} total=${executionTimeMs}ms ping=${pingMs}ms schema=${schemaMs}ms optimized=${tunnelOptimized} sql=${previewSql(sql)} err=${msg}`,
+      )
+
+      if (entry.generation !== generationAtStart) {
+        return { ...empty, executionTimeMs, error: 'Query cancelled' }
       }
 
       return {
@@ -316,21 +561,77 @@ class MysqlClient {
   }
 
   /**
-   * List all databases the connected user can see.
+   * Abort a running query and reopen the MySQL connection on the same tunnel port.
    */
+  async cancelQuery(id: string): Promise<{ success: boolean; error?: string }> {
+    const entry = this.connections.get(id)
+    if (!entry) {
+      return { success: false, error: `No connection found for id "${id}"` }
+    }
+
+    try {
+      entry.generation += 1
+      entry.queryInFlight = false
+      try {
+        entry.queryConn.destroy()
+      } catch {
+        // ignore
+      }
+
+      await Promise.race([
+        this.replaceQueryConnection(entry),
+        new Promise<never>((_, reject) => {
+          setTimeout(
+            () => reject(new Error(`Reconnect after cancel timed out after ${CONNECT_TIMEOUT_MS / 1000}s`)),
+            CONNECT_TIMEOUT_MS,
+          )
+        }),
+      ])
+      entry.queryInFlight = false
+      entry.meta.connected = true
+      return { success: true }
+    } catch (err: any) {
+      entry.meta.connected = false
+      try {
+        entry.queryConn.destroy()
+      } catch {
+        // keep entry for a later reconnect attempt
+      }
+      return { success: false, error: err?.message ?? String(err) }
+    }
+  }
+
+  /**
+   * Reopen the MySQL socket on an existing tunnel (refreshes Akeyless credentials).
+   */
+  async reconnect(
+    id: string,
+    host: string,
+    port: number,
+    user: string,
+    password: string,
+    database: string,
+  ): Promise<DbConnection> {
+    return this.connect(id, host, port, user, password, database)
+  }
+
+  isConnected(id: string): boolean {
+    const entry = this.connections.get(id)
+    return entry?.meta.connected === true
+  }
+
+  hasConnection(id: string): boolean {
+    return this.connections.has(id)
+  }
+
   async listDatabases(id: string): Promise<string[]> {
     const entry = this.connections.get(id)
     if (!entry) {
       throw new Error(`No connection found for id "${id}"`)
     }
 
-    try {
-      const [rows] = await queryWithTimeout(entry.connection, 'SHOW DATABASES')
-      return (rows as any[]).map((r: any) => (Array.isArray(r) ? r[0] : r.Database) as string)
-    } catch (err: any) {
-      if (isConnectionLostError(err)) entry.meta.connected = false
-      throw err
-    }
+    const [rows] = await this.queryMeta(entry, 'SHOW DATABASES')
+    return (rows as any[]).map((r: any) => (Array.isArray(r) ? r[0] : r.Database) as string)
   }
 
   /**
@@ -340,7 +641,11 @@ class MysqlClient {
    * Uses SHOW FULL TABLES (fast data-dictionary path). No INFORMATION_SCHEMA
    * fallback — that path can hang for minutes on large schemas over SSH tunnels.
    */
-  async listTables(id: string, database?: string): Promise<TableInfo[]> {
+  async listTables(
+    id: string,
+    database?: string,
+    options?: { forceRefresh?: boolean },
+  ): Promise<TableInfo[]> {
     const entry = this.connections.get(id)
     if (!entry) {
       throw new Error(`No connection found for id "${id}"`)
@@ -351,12 +656,28 @@ class MysqlClient {
       throw new Error('No database selected on this connection')
     }
 
-    try {
-      const qualifiedDb = entry.connection.escapeId(db)
-      const [rows] = await queryWithTimeout(
-        entry.connection,
-        `SHOW FULL TABLES FROM ${qualifiedDb}`,
+    const forceRefresh = options?.forceRefresh === true
+    const cached = entry.tablesListCache
+    if (
+      !forceRefresh &&
+      cached &&
+      cached.database === db &&
+      Date.now() - cached.at < TABLES_LIST_CACHE_TTL_MS
+    ) {
+      console.log(
+        `[mysql-client] list-tables cache hit id=${id} count=${cached.tables.length}`,
       )
+      return cached.tables
+    }
+
+    if (!forceRefresh && entry.listTablesInFlight) {
+      return entry.listTablesInFlight
+    }
+
+    const fetchTables = async (): Promise<TableInfo[]> => {
+      await this.ensureMetaReady(entry)
+      const qualifiedDb = entry.metaConn.escapeId(db)
+      const [rows] = await this.queryMeta(entry, `SHOW FULL TABLES FROM ${qualifiedDb}`)
 
       const tables = (rows as any[]).map((r: any) => {
         const [name, tableType] = parseShowFullTablesRow(r, db)
@@ -365,15 +686,18 @@ class MysqlClient {
           type: (tableType === 'VIEW' ? 'VIEW' : 'TABLE') as 'TABLE' | 'VIEW',
           engine: null,
           rows: null,
-          comment: ''
+          comment: '',
         }
       })
       tables.sort((a, b) => a.name.localeCompare(b.name))
+      entry.tablesListCache = { database: db, tables, at: Date.now() }
       return tables
-    } catch (err: any) {
-      if (isConnectionLostError(err)) entry.meta.connected = false
-      throw err
     }
+
+    entry.listTablesInFlight = fetchTables().finally(() => {
+      entry.listTablesInFlight = null
+    })
+    return entry.listTablesInFlight
   }
 
   /**
@@ -386,34 +710,44 @@ class MysqlClient {
     }
 
     const db = database ?? entry.meta.database
+    const cacheKey = columnCacheKey(db, tableName)
+    const cached = entry.columnCache.get(cacheKey)
+    if (cached) return cached
 
-    try {
-      // Escape database and table identifiers to prevent injection.
-      // mysql2 connection.escapeId handles backtick-quoting.
-      const qualifiedTable = database
-        ? `${entry.connection.escapeId(db)}.${entry.connection.escapeId(tableName)}`
-        : entry.connection.escapeId(tableName)
+    const inflightKey = `${id}\0${cacheKey}`
+    return coalesceInflight(entry.describeInFlight, inflightKey, () =>
+      this.fetchTableColumns(entry, tableName, db),
+    )
+  }
 
-      const [rows] = await entry.connection.query(`SHOW FULL COLUMNS FROM ${qualifiedTable}`)
+  private async fetchTableColumns(
+    entry: ConnectionEntry,
+    tableName: string,
+    db: string,
+  ): Promise<ColumnInfo[]> {
+    const qualifiedTable = db
+      ? `${entry.metaConn.escapeId(db)}.${entry.metaConn.escapeId(tableName)}`
+      : entry.metaConn.escapeId(tableName)
 
-      return (rows as any[]).map((r: any) => {
-        // rowsAsArray: [Field, Type, Collation, Null, Key, Default, Extra, Privileges, Comment]
-        const row = Array.isArray(r)
-          ? r
-          : [r.Field, r.Type, r.Collation, r.Null, r.Key, r.Default, r.Extra, r.Privileges, r.Comment]
-        return {
-          name: row[0] as string,
-          type: row[1] as string,
-          nullable: row[3] === 'YES',
-          key: (row[4] as string) ?? '',
-          defaultValue: row[5] != null ? String(row[5]) : null,
-          extra: (row[6] as string) ?? ''
-        }
-      })
-    } catch (err: any) {
-      if (isConnectionLostError(err)) entry.meta.connected = false
-      throw err
-    }
+    const [rows] = await this.queryMeta(entry, `SHOW FULL COLUMNS FROM ${qualifiedTable}`)
+
+    const columns = (rows as any[]).map((r: any) => {
+      // rowsAsArray: [Field, Type, Collation, Null, Key, Default, Extra, Privileges, Comment]
+      const row = Array.isArray(r)
+        ? r
+        : [r.Field, r.Type, r.Collation, r.Null, r.Key, r.Default, r.Extra, r.Privileges, r.Comment]
+      return {
+        name: row[0] as string,
+        type: row[1] as string,
+        nullable: row[3] === 'YES',
+        key: (row[4] as string) ?? '',
+        defaultValue: row[5] != null ? String(row[5]) : null,
+        extra: (row[6] as string) ?? '',
+      }
+    })
+
+    entry.columnCache.set(columnCacheKey(db, tableName), columns)
+    return columns
   }
 
   /**
@@ -440,21 +774,6 @@ class MysqlClient {
  * Returns true if the error indicates the underlying TCP connection is dead
  * (server gone, connection reset, protocol desync, etc.).
  */
-/**
- * Append LIMIT to bare SELECT/WITH so MySQL does not stream millions of rows over the tunnel.
- */
-function capUnboundedSelect(
-  sql: string,
-  maxRows: number,
-): { sql: string; rowCapApplied: boolean } {
-  const trimmed = sql.trim()
-  const body = trimmed.replace(/;+\s*$/, '')
-  if (/;\s*\S/.test(body)) return { sql, rowCapApplied: false }
-  if (!/^\s*(select|with)\b/i.test(body)) return { sql, rowCapApplied: false }
-  if (/\blimit\s+(\d+|\?)/i.test(body)) return { sql, rowCapApplied: false }
-  return { sql: `${body} LIMIT ${maxRows + 1}`, rowCapApplied: true }
-}
-
 function isConnectionLostError(err: any): boolean {
   if (!err) return false
   const code: string = err.code ?? ''
@@ -468,6 +787,20 @@ function isConnectionLostError(err: any): boolean {
     'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR'
   ])
   return fatal || lostCodes.has(code)
+}
+
+/** Shrink large values before IPC so wide rows return faster over the tunnel. */
+function sanitizeCellForIpc(value: unknown): unknown {
+  if (value === null || value === undefined) return value
+  if (Buffer.isBuffer(value)) {
+    return value.length <= MAX_CELL_CHARS ? value : value.subarray(0, MAX_CELL_CHARS)
+  }
+  if (typeof value === 'string' && value.length > MAX_CELL_CHARS) {
+    return `${value.slice(0, MAX_CELL_CHARS)}…`
+  }
+  if (typeof value === 'object') return value
+  const text = String(value)
+  return text.length > MAX_CELL_CHARS ? `${text.slice(0, MAX_CELL_CHARS)}…` : text
 }
 
 // ---------------------------------------------------------------------------

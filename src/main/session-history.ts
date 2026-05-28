@@ -6,8 +6,11 @@ import { DEFAULT_SESSION_UI } from '../shared/session-ui'
 
 // ── Active session tracking (for auto-resume on restart) ──
 
+import type { AgentProvider } from '../shared/agent-provider'
+
 export interface ActiveSession {
   id: string
+  provider?: AgentProvider
   claudeSessionId: string | null
   folderName: string
   folderPath: string

@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import CodeMirror from '@uiw/react-codemirror'
+import React, { useState, useEffect, useCallback, useRef, useMemo, startTransition } from 'react'
 import { sql, MySQL } from '@codemirror/lang-sql'
 import { Prec } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
@@ -7,20 +6,24 @@ import {
   filterProducers,
   listProducersForBrowse,
   dedupeProducersForBrowse,
-  groupProducersByKgb,
   groupProducersByCluster,
-  clusterFromProducer,
+  producerCluster,
+  parseProducerPathFields,
   applyProducerBrowseFilters,
   duplicateDbNames,
   shouldShowProducerSubtitle,
 } from '../../shared/db-picker'
+import { normalizeSqlSingleQuotedTableIds } from '../../shared/sql-ident-normalize'
+import { shouldApplyDescribeResult } from '../db-columns-describe'
 import './DbWorkbenchView.css'
+import { DbSessionWorkspacePanel } from './DbSessionWorkspacePanel'
 
 /* ── Local Types (no shared imports to avoid circular deps) ── */
 
 interface DbProducer {
   name: string
   kgb: string
+  cluster: string
   producer: string
   dbName: string
   type: 'mysql' | 'mongo'
@@ -35,9 +38,14 @@ interface QueryResult {
   error?: string
   rowCapApplied?: boolean
   truncated?: boolean
+  tunnelOptimized?: boolean
 }
 
 const QUERY_CLIENT_TIMEOUT_MS = 95_000
+const CANCEL_CLIENT_TIMEOUT_MS = 30_000
+const TABLE_PREVIEW_LIMIT = 25
+/** Cap rendered result rows so tab switches stay fast with large result sets. */
+const RESULTS_DISPLAY_CAP = 250
 
 interface TableInfo {
   name: string
@@ -56,7 +64,12 @@ interface ColumnInfo {
   extra: string
 }
 
-const TABLES_FETCH_TIMEOUT_MS = 35_000
+const TABLES_FETCH_TIMEOUT_MS = 50_000
+const COLUMNS_DESCRIBE_TIMEOUT_MS = 50_000
+
+/** Survives Vite HMR — avoids refetching 145 tables on every hot reload. */
+const hmrTablesCache = new Map<string, TableInfo[]>()
+const tablesFetchInflight = new Map<string, Promise<void>>()
 
 interface DbSessionWorkspace {
   tables: TableInfo[]
@@ -65,6 +78,7 @@ interface DbSessionWorkspace {
   expandedTable: string | null
   tableColumns: Record<string, ColumnInfo[]>
   columnsLoading: string | null
+  columnsError: Record<string, string>
   query: string
   result: QueryResult | null
   queryRunning: boolean
@@ -77,7 +91,9 @@ interface DbSession {
   connectionId: string
   tunnelId: string
   kgb: string
+  cluster: string
   dbName: string
+  producerName: string
   label: string
   workspace: DbSessionWorkspace
 }
@@ -90,6 +106,7 @@ function createEmptyWorkspace(): DbSessionWorkspace {
     expandedTable: null,
     tableColumns: {},
     columnsLoading: null,
+    columnsError: {},
     query: '',
     result: null,
     queryRunning: false,
@@ -103,11 +120,18 @@ function createSession(conn: {
   tunnelId: string
   kgb: string
   dbName: string
+  producerName?: string
+  cluster?: string
 }): DbSession {
+  const cluster =
+    conn.cluster ??
+    (conn.producerName ? parseProducerPathFields(conn.producerName).cluster : '')
   return {
     id: conn.connectionId,
     ...conn,
-    label: `${conn.dbName} (${conn.kgb})`,
+    producerName: conn.producerName ?? '',
+    cluster,
+    label: cluster ? `${conn.dbName} · ${cluster}` : conn.dbName,
     workspace: createEmptyWorkspace(),
   }
 }
@@ -169,6 +193,20 @@ function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
+function renderNullCell() {
+  return <span className="dbw-null">NULL</span>
+}
+
+function renderCellValue(value: unknown) {
+  if (value === null || value === undefined) return renderNullCell()
+  if (typeof value === 'object') {
+    const bytes = bufferToBytes(value)
+    if (bytes) return formatGuid(bytes)
+    return JSON.stringify(value)
+  }
+  return String(value)
+}
+
 /* ── Component ── */
 
 export function DbWorkbenchView() {
@@ -182,14 +220,16 @@ export function DbWorkbenchView() {
   const [producers, setProducers] = useState<DbProducer[]>([])
   const [producersLoading, setProducersLoading] = useState(false)
   const [producerSearch, setProducerSearch] = useState('')
-  const [pickerMode, setPickerMode] = useState<'kgb' | 'cluster' | 'database'>('kgb')
-  const [selectedKgb, setSelectedKgb] = useState<string | null>(null)
+  const [pickerMode, setPickerMode] = useState<'cluster' | 'database'>('cluster')
   const [selectedCluster, setSelectedCluster] = useState<string | null>(null)
-  const [filterKgb, setFilterKgb] = useState('')
   const [filterCluster, setFilterCluster] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  const runQueryRef = useRef<(sqlOverride?: string) => void>(() => {})
+  const runQueryRef = useRef<(sessionId: string, sqlOverride?: string) => void>(() => {})
+  const queryRunIdRef = useRef(0)
+  const columnsDescribeGenRef = useRef<Map<string, number>>(new Map())
+  const sessionsRef = useRef<DbSession[]>([])
+  sessionsRef.current = sessions
   const editorViewRef = useRef<EditorView | null>(null)
   const connectPhaseTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
   const queryElapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -199,12 +239,17 @@ export function DbWorkbenchView() {
     () => sessions.find((s) => s.id === activeSessionId) ?? null,
     [sessions, activeSessionId],
   )
-  const ws = activeSession?.workspace
 
   useEffect(() => {
     if (sessions.length > 0 && !activeSessionId) {
       setActiveSessionId(sessions[sessions.length - 1].id)
     }
+  }, [sessions, activeSessionId])
+
+  useEffect(() => {
+    if (!activeSessionId) return
+    if (sessions.some((s) => s.id === activeSessionId)) return
+    setActiveSessionId(sessions[sessions.length - 1]?.id ?? null)
   }, [sessions, activeSessionId])
 
   // Restore tabs when the view remounts (e.g. app restart) while main still holds tunnels.
@@ -215,50 +260,26 @@ export function DbWorkbenchView() {
       if (cancelled || !res.success || !res.sessions?.length) return
       setSessions((prev) => {
         if (prev.length > 0) return prev
-        const restored = res.sessions!.map((s) =>
-          createSession({
+        const restored = res.sessions!.map((s) => {
+          const session = createSession({
             connectionId: s.connectionId,
             tunnelId: s.tunnelId,
             kgb: s.kgb,
             dbName: s.dbName,
-          }),
-        )
+            producerName: s.producerName,
+          })
+          const cachedTables = hmrTablesCache.get(s.connectionId)
+          if (cachedTables?.length) {
+            session.workspace = { ...session.workspace, tables: cachedTables }
+          }
+          return session
+        })
         return restored
       })
       setActiveSessionId((prev) => prev ?? res.sessions![res.sessions!.length - 1].connectionId)
     })()
     return () => {
       cancelled = true
-    }
-  }, [])
-
-  useEffect(() => {
-    const unsubIdle = window.api.onDbIdleDisconnected(({ connectionId }) => {
-      setSessions((prev) => {
-        const next = prev.filter((s) => s.connectionId !== connectionId)
-        setActiveSessionId((activeId) =>
-          activeId === connectionId ? (next[next.length - 1]?.id ?? null) : activeId,
-        )
-        return next
-      })
-      setConnectError('Connection closed after idle timeout (4 hours). Reconnect to continue.')
-    })
-    const unsubTunnel =
-      typeof window.api.onDbTunnelClosed === 'function'
-        ? window.api.onDbTunnelClosed(({ connectionId, reason }) => {
-            setSessions((prev) => {
-              const next = prev.filter((s) => s.connectionId !== connectionId)
-              setActiveSessionId((activeId) =>
-                activeId === connectionId ? (next[next.length - 1]?.id ?? null) : activeId,
-              )
-              return next
-            })
-            setConnectError(`${reason}. Reconnect to continue.`)
-          })
-        : () => {}
-    return () => {
-      unsubIdle()
-      unsubTunnel()
     }
   }, [])
 
@@ -310,6 +331,57 @@ export function DbWorkbenchView() {
     }, 1000)
   }, [stopQueryElapsedTimer])
 
+  const abortInFlightQueryForConnection = useCallback(
+    (connectionId: string) => {
+      queryRunIdRef.current += 1
+      stopQueryElapsedTimer()
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.connectionId === connectionId && s.workspace.queryRunning
+            ? { ...s, workspace: { ...s.workspace, queryRunning: false } }
+            : s,
+        ),
+      )
+    },
+    [stopQueryElapsedTimer],
+  )
+
+  useEffect(() => {
+    const unsubIdle = window.api.onDbIdleDisconnected(({ connectionId }) => {
+      abortInFlightQueryForConnection(connectionId)
+      hmrTablesCache.delete(connectionId)
+      tablesFetchInflight.delete(connectionId)
+      setSessions((prev) => {
+        const next = prev.filter((s) => s.connectionId !== connectionId)
+        setActiveSessionId((activeId) =>
+          activeId === connectionId ? (next[next.length - 1]?.id ?? null) : activeId,
+        )
+        return next
+      })
+      setConnectError('Connection closed after idle timeout (4 hours). Reconnect to continue.')
+    })
+    const unsubTunnel =
+      typeof window.api.onDbTunnelClosed === 'function'
+        ? window.api.onDbTunnelClosed(({ connectionId, reason }) => {
+            abortInFlightQueryForConnection(connectionId)
+            hmrTablesCache.delete(connectionId)
+            tablesFetchInflight.delete(connectionId)
+            setSessions((prev) => {
+              const next = prev.filter((s) => s.connectionId !== connectionId)
+              setActiveSessionId((activeId) =>
+                activeId === connectionId ? (next[next.length - 1]?.id ?? null) : activeId,
+              )
+              return next
+            })
+            setConnectError(`${reason}. Reconnect to continue.`)
+          })
+        : () => {}
+    return () => {
+      unsubIdle()
+      unsubTunnel()
+    }
+  }, [abortInFlightQueryForConnection])
+
   const patchActiveSession = useCallback(
     (patch: Partial<DbSessionWorkspace>) => {
       if (!activeSessionId) return
@@ -347,10 +419,8 @@ export function DbWorkbenchView() {
   const openPicker = useCallback(async () => {
     setShowPicker(true)
     setProducerSearch('')
-    setPickerMode('kgb')
-    setSelectedKgb(null)
+    setPickerMode('cluster')
     setSelectedCluster(null)
-    setFilterKgb('')
     setFilterCluster('')
     await loadProducers(false)
   }, [loadProducers])
@@ -361,15 +431,11 @@ export function DbWorkbenchView() {
     }
   }, [showPicker, producersLoading])
 
-  const kgbTags = useMemo(
-    () => [...new Set(producers.map((p) => p.kgb))].sort((a, b) => a.localeCompare(b)),
-    [producers],
-  )
-
   const clusterTags = useMemo(() => {
     const counts = new Map<string, number>()
     for (const p of producers) {
-      const cluster = clusterFromProducer(p)
+      const cluster = producerCluster(p)
+      if (!cluster) continue
       counts.set(cluster, (counts.get(cluster) ?? 0) + 1)
     }
     return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b))
@@ -379,14 +445,9 @@ export function DbWorkbenchView() {
   const globalSearchMatches = useMemo(
     () =>
       applyProducerBrowseFilters(filterProducers(producers, producerSearch), {
-        kgb: filterKgb,
         cluster: filterCluster,
       }),
-    [producers, producerSearch, filterKgb, filterCluster],
-  )
-  const globalSearchKgbGroups = useMemo(
-    () => groupProducersByKgb(globalSearchMatches),
-    [globalSearchMatches],
+    [producers, producerSearch, filterCluster],
   )
   const globalSearchClusterGroups = useMemo(
     () => groupProducersByCluster(globalSearchMatches),
@@ -396,13 +457,12 @@ export function DbWorkbenchView() {
   const databaseBrowseList = useMemo(
     () =>
       applyProducerBrowseFilters(listProducersForBrowse(producers, producerSearch), {
-        kgb: filterKgb,
         cluster: filterCluster,
       }),
-    [producers, producerSearch, filterKgb, filterCluster],
+    [producers, producerSearch, filterCluster],
   )
   const databaseBrowseGroups = useMemo(
-    () => groupProducersByKgb(databaseBrowseList),
+    () => groupProducersByCluster(databaseBrowseList),
     [databaseBrowseList],
   )
   const databaseBrowseDupes = useMemo(
@@ -410,65 +470,36 @@ export function DbWorkbenchView() {
     [databaseBrowseList],
   )
 
-  const filteredKgbTags = kgbTags.filter((c) => {
-    const q = producerSearch.toLowerCase()
-    if (!q) return true
-    return c.toLowerCase().includes(q)
-  })
-
   const filteredClusterTags = clusterTags.filter(([cluster]) => {
     const q = producerSearch.toLowerCase()
     if (!q) return true
     return cluster.toLowerCase().includes(q)
   })
 
-  const filterKgbOptions = useMemo(() => {
-    const source = selectedCluster
-      ? producers.filter((p) => clusterFromProducer(p) === selectedCluster)
-      : producers
-    return [...new Set(source.map((p) => p.kgb))].sort((a, b) => a.localeCompare(b))
-  }, [producers, selectedCluster])
-
-  const filterClusterOptions = useMemo(() => {
-    const source = selectedKgb ? producers.filter((p) => p.kgb === selectedKgb) : producers
-    return [...new Set(source.map((p) => clusterFromProducer(p)))].sort((a, b) => a.localeCompare(b))
-  }, [producers, selectedKgb])
-
-  const kgbDatabases = useMemo(() => {
-    if (!selectedKgb) return []
-    const filtered = applyProducerBrowseFilters(
-      producers.filter((p) => p.kgb === selectedKgb),
-      { cluster: filterCluster },
-    ).filter((p) => {
-      const q = producerSearch.toLowerCase()
-      if (!q) return true
-      return (
-        p.dbName.toLowerCase().includes(q) ||
-        p.producer.toLowerCase().includes(q) ||
-        clusterFromProducer(p).toLowerCase().includes(q)
-      )
-    })
-    return dedupeProducersForBrowse(filtered).sort((a, b) => a.dbName.localeCompare(b.dbName))
-  }, [producers, selectedKgb, producerSearch, filterCluster])
+  const filterClusterOptions = useMemo(
+    () =>
+      [...new Set(producers.map((p) => producerCluster(p)).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [producers],
+  )
 
   const clusterDatabases = useMemo(() => {
     if (!selectedCluster) return []
-    const filtered = applyProducerBrowseFilters(
-      producers.filter((p) => clusterFromProducer(p) === selectedCluster),
-      { kgb: filterKgb },
-    ).filter((p) => {
-      const q = producerSearch.toLowerCase()
-      if (!q) return true
-      return (
-        p.dbName.toLowerCase().includes(q) ||
-        p.producer.toLowerCase().includes(q) ||
-        p.kgb.toLowerCase().includes(q)
-      )
-    })
+    const filtered = producers
+      .filter((p) => producerCluster(p) === selectedCluster)
+      .filter((p) => {
+        if (filterCluster && producerCluster(p) !== filterCluster) return false
+        const q = producerSearch.toLowerCase()
+        if (!q) return true
+        return (
+          p.dbName.toLowerCase().includes(q) ||
+          p.producer.toLowerCase().includes(q)
+        )
+      })
     return dedupeProducersForBrowse(filtered).sort((a, b) => a.dbName.localeCompare(b.dbName))
-  }, [producers, selectedCluster, producerSearch, filterKgb])
+  }, [producers, selectedCluster, producerSearch, filterCluster])
 
-  const kgbDupes = useMemo(() => duplicateDbNames(kgbDatabases), [kgbDatabases])
   const clusterDupes = useMemo(() => duplicateDbNames(clusterDatabases), [clusterDatabases])
 
   /* ── Connect / Disconnect ── */
@@ -506,11 +537,14 @@ export function DbWorkbenchView() {
         return
       }
 
+      const { cluster } = parseProducerPathFields(producerName)
       const newSession = createSession({
         connectionId: res.connectionId!,
         tunnelId: res.tunnelId!,
         kgb: res.kgb!,
         dbName: res.dbName!,
+        producerName,
+        cluster,
       })
       setSessions((prev) => [...prev, newSession])
       setActiveSessionId(newSession.id)
@@ -538,6 +572,8 @@ export function DbWorkbenchView() {
         // Best effort
       }
       const next = sessions.filter((s) => s.id !== sessionId)
+      hmrTablesCache.delete(session.connectionId)
+      tablesFetchInflight.delete(session.connectionId)
       setSessions(next)
       if (activeSessionId === sessionId) {
         setActiveSessionId(next[next.length - 1]?.id ?? null)
@@ -549,27 +585,47 @@ export function DbWorkbenchView() {
   /* ── Fetch Tables ── */
 
   const fetchTables = useCallback(
-    async (sessionId: string) => {
-      let connectionId: string | null = null
-      setSessions((prev) => {
-        const session = prev.find((s) => s.id === sessionId)
-        connectionId = session?.connectionId ?? null
-        return prev.map((s) =>
-          s.id === sessionId
-            ? {
-                ...s,
-                workspace: { ...s.workspace, tablesLoading: true, tablesError: null },
-              }
-            : s,
-        )
-      })
+    async (sessionId: string, forceRefresh = false) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+
+      const connectionId = session.connectionId
       if (!connectionId) {
         patchSession(sessionId, {
           tablesLoading: false,
-          tablesError: 'No active connection for this tab',
+          tablesError: 'Connection lost. Click Retry to reconnect.',
         })
         return
       }
+
+      if (!forceRefresh) {
+        const cached = hmrTablesCache.get(connectionId)
+        if (cached?.length && session.workspace.tables.length === 0) {
+          patchSession(sessionId, {
+            tables: cached,
+            tablesLoading: false,
+            tablesError: null,
+          })
+          return
+        }
+      }
+
+      const inflight = tablesFetchInflight.get(connectionId)
+      if (inflight && !forceRefresh) {
+        patchSession(sessionId, { tablesLoading: true, tablesError: null })
+        await inflight
+        const cached = hmrTablesCache.get(connectionId)
+        if (cached?.length) {
+          patchSession(sessionId, {
+            tables: cached,
+            tablesLoading: false,
+            tablesError: null,
+          })
+        }
+        return
+      }
+
+      patchSession(sessionId, { tablesLoading: true, tablesError: null })
 
       const failTables = (errMsg: string) => {
         updateSessionWorkspace(sessionId, (ws) => ({
@@ -581,56 +637,154 @@ export function DbWorkbenchView() {
         }))
       }
 
-      try {
-        const res = await Promise.race([
-          window.api.dbListTables(connectionId),
-          new Promise<{ success: false; tables: []; error: string }>((_, reject) => {
-            setTimeout(
-              () => reject(new Error(`Timed out after ${TABLES_FETCH_TIMEOUT_MS / 1000}s`)),
-              TABLES_FETCH_TIMEOUT_MS,
-            )
-          }),
-        ])
-        if (!res.success) {
-          failTables(res.error ?? 'Unknown error')
-        } else {
-          patchSession(sessionId, {
-            tables: res.tables ?? [],
-            tablesLoading: false,
-            tablesError: null,
-          })
+      const run = async () => {
+        try {
+          const res = await Promise.race([
+            window.api.dbListTables(connectionId, forceRefresh),
+            new Promise<{ success: false; tables: []; error: string }>((_, reject) => {
+              setTimeout(
+                () => reject(new Error(`Timed out after ${TABLES_FETCH_TIMEOUT_MS / 1000}s`)),
+                TABLES_FETCH_TIMEOUT_MS,
+              )
+            }),
+          ])
+          if (!res.success) {
+            failTables(res.error ?? 'Failed to load tables')
+          } else {
+            hmrTablesCache.set(connectionId, res.tables ?? [])
+            patchSession(sessionId, {
+              tables: res.tables ?? [],
+              tablesLoading: false,
+              tablesError: null,
+            })
+          }
+        } catch (err) {
+          failTables(err instanceof Error ? err.message : String(err))
         }
-      } catch (err) {
-        failTables(err instanceof Error ? err.message : String(err))
+      }
+
+      const task = run()
+      tablesFetchInflight.set(connectionId, task)
+      try {
+        await task
+      } finally {
+        tablesFetchInflight.delete(connectionId)
       }
     },
     [patchSession, updateSessionWorkspace],
   )
 
-  const activeTablesLength = activeSession?.workspace.tables.length ?? 0
-  const activeTablesLoading = activeSession?.workspace.tablesLoading ?? false
-
   useEffect(() => {
     if (!activeSessionId) return
-    if (activeTablesLength > 0 || activeTablesLoading) return
+    const session = sessionsRef.current.find((s) => s.id === activeSessionId)
+    if (!session) return
+    if (session.workspace.tables.length > 0 || session.workspace.tablesLoading) return
     void fetchTables(activeSessionId)
-  }, [activeSessionId, activeTablesLength, activeTablesLoading, fetchTables])
+  }, [activeSessionId, fetchTables])
+
+  const selectSessionTab = useCallback((sessionId: string) => {
+    startTransition(() => setActiveSessionId(sessionId))
+  }, [])
 
   /* ── Expand Table (describe) ── */
 
-  const toggleTable = useCallback(
-    async (tableName: string) => {
-      if (!activeSessionId) return
+  const fetchTableColumnsForSession = useCallback(
+    async (sessionId: string, connectionId: string, tableName: string) => {
+      const gen = (columnsDescribeGenRef.current.get(sessionId) ?? 0) + 1
+      columnsDescribeGenRef.current.set(sessionId, gen)
+
+      updateSessionWorkspace(sessionId, (w) => {
+        const { [tableName]: _removed, ...restErrors } = w.columnsError
+        return {
+          columnsLoading: tableName,
+          columnsError: restErrors,
+        }
+      })
+
+      try {
+        const res = await Promise.race([
+          window.api.dbDescribeTable(connectionId, tableName),
+          new Promise<{ success: false; columns: []; error: string }>((_, reject) => {
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `Timed out loading columns after ${COLUMNS_DESCRIBE_TIMEOUT_MS / 1000}s`,
+                  ),
+                ),
+              COLUMNS_DESCRIBE_TIMEOUT_MS,
+            )
+          }),
+        ])
+
+        const session = sessionsRef.current.find((s) => s.id === sessionId)
+        if (
+          !session ||
+          !shouldApplyDescribeResult(
+            columnsDescribeGenRef.current.get(sessionId) ?? 0,
+            gen,
+            session.workspace.expandedTable,
+            tableName,
+          )
+        ) {
+          return
+        }
+
+        if (!res.success) {
+          const errMsg = res.error ?? 'Unknown error'
+          updateSessionWorkspace(sessionId, (w) => ({
+            columnsLoading: w.columnsLoading === tableName ? null : w.columnsLoading,
+            columnsError: { ...w.columnsError, [tableName]: errMsg },
+            messages: [...w.messages, `Error describing ${tableName}: ${errMsg}`],
+            activeResultTab: 'messages',
+          }))
+        } else {
+          updateSessionWorkspace(sessionId, (w) => {
+            const { [tableName]: _removed, ...restErrors } = w.columnsError
+            return {
+              columnsLoading: w.columnsLoading === tableName ? null : w.columnsLoading,
+              tableColumns: { ...w.tableColumns, [tableName]: res.columns ?? [] },
+              columnsError: restErrors,
+            }
+          })
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        const session = sessionsRef.current.find((s) => s.id === sessionId)
+        if (
+          !session ||
+          !shouldApplyDescribeResult(
+            columnsDescribeGenRef.current.get(sessionId) ?? 0,
+            gen,
+            session.workspace.expandedTable,
+            tableName,
+          )
+        ) {
+          return
+        }
+        updateSessionWorkspace(sessionId, (w) => ({
+          columnsLoading: w.columnsLoading === tableName ? null : w.columnsLoading,
+          columnsError: { ...w.columnsError, [tableName]: errMsg },
+          messages: [...w.messages, `Error describing ${tableName}: ${errMsg}`],
+          activeResultTab: 'messages',
+        }))
+      }
+    },
+    [updateSessionWorkspace],
+  )
+
+  const toggleTableForSession = useCallback(
+    async (sessionId: string, tableName: string) => {
       let connectionId: string | null = null
       let skipFetch = true
       setSessions((prev) => {
-        const session = prev.find((s) => s.id === activeSessionId)
+        const session = prev.find((s) => s.id === sessionId)
         if (!session) return prev
         connectionId = session.connectionId
         if (session.workspace.expandedTable === tableName) {
           skipFetch = true
           return prev.map((s) =>
-            s.id === activeSessionId
+            s.id === sessionId
               ? { ...s, workspace: { ...s.workspace, expandedTable: null } }
               : s,
           )
@@ -638,75 +792,74 @@ export function DbWorkbenchView() {
         if (session.workspace.tableColumns[tableName]) {
           skipFetch = true
           return prev.map((s) =>
-            s.id === activeSessionId
+            s.id === sessionId
               ? { ...s, workspace: { ...s.workspace, expandedTable: tableName } }
               : s,
           )
         }
         skipFetch = false
         return prev.map((s) =>
-          s.id === activeSessionId
+          s.id === sessionId
             ? { ...s, workspace: { ...s.workspace, expandedTable: tableName } }
             : s,
         )
       })
       if (!connectionId || skipFetch) return
 
-      patchActiveSession({ columnsLoading: tableName })
-      try {
-        const res = await window.api.dbDescribeTable(connectionId, tableName)
-        if (!res.success) {
-          updateSessionWorkspace(activeSessionId, (w) => ({
-            columnsLoading: null,
-            messages: [
-              ...w.messages,
-              `Error describing ${tableName}: ${res.error ?? 'Unknown error'}`,
-            ],
-            activeResultTab: 'messages',
-          }))
-        } else {
-          updateSessionWorkspace(activeSessionId, (w) => ({
-            columnsLoading: null,
-            tableColumns: { ...w.tableColumns, [tableName]: res.columns ?? [] },
-          }))
-        }
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
-        updateSessionWorkspace(activeSessionId, (w) => ({
-          columnsLoading: null,
-          messages: [...w.messages, `Error describing ${tableName}: ${errMsg}`],
-          activeResultTab: 'messages',
-        }))
-      }
+      void fetchTableColumnsForSession(sessionId, connectionId, tableName)
     },
-    [activeSessionId, patchActiveSession, updateSessionWorkspace],
+    [fetchTableColumnsForSession],
   )
 
-  const handleTableClick = useCallback(
-    (tableName: string) => {
-      patchActiveSession({ query: `SELECT * FROM \`${tableName}\` LIMIT 100;` })
+  const retryColumnsForSession = useCallback(
+    (sessionId: string, tableName: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+      patchSession(sessionId, { expandedTable: tableName })
+      void fetchTableColumnsForSession(sessionId, session.connectionId, tableName)
     },
-    [patchActiveSession],
+    [fetchTableColumnsForSession, patchSession],
+  )
+
+  const handleTableClickForSession = useCallback(
+    (sessionId: string, tableName: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (session?.workspace.queryRunning) {
+        updateSessionWorkspace(sessionId, (w) => ({
+          messages: [...w.messages, 'A query is still running — Cancel or wait.'],
+          activeResultTab: 'messages',
+        }))
+        return
+      }
+      const sql = `SELECT * FROM \`${tableName}\` LIMIT ${TABLE_PREVIEW_LIMIT};`
+      patchSession(sessionId, { query: sql })
+      void runQueryRef.current(sessionId, sql)
+    },
+    [patchSession, updateSessionWorkspace],
   )
 
   /* ── Run Query ── */
 
-  const runQuery = useCallback(
-    async (sqlOverride?: string) => {
-      if (!activeSessionId) return
+  const runQueryForSession = useCallback(
+    async (sessionId: string, sqlOverride?: string) => {
       let connectionId: string | null = null
       let sql = ''
+      let skippedBecauseRunning = false
+      const runId = ++queryRunIdRef.current
       setSessions((prev) => {
-        const session = prev.find((s) => s.id === activeSessionId)
+        const session = prev.find((s) => s.id === sessionId)
         if (!session) return prev
         connectionId = session.connectionId
         sql = (sqlOverride ?? session.workspace.query).trim()
         if (!sql || session.workspace.queryRunning) {
+          if (sql && session.workspace.queryRunning) {
+            skippedBecauseRunning = true
+          }
           connectionId = null
           return prev
         }
         return prev.map((s) =>
-          s.id === activeSessionId
+          s.id === sessionId
             ? {
                 ...s,
                 workspace: {
@@ -719,7 +872,21 @@ export function DbWorkbenchView() {
             : s,
         )
       })
-      if (!connectionId || !sql) return
+      if (!connectionId || !sql) {
+        if (skippedBecauseRunning) {
+          updateSessionWorkspace(sessionId, (w) => ({
+            messages: [...w.messages, 'A query is still running — Cancel or wait.'],
+            activeResultTab: 'messages',
+          }))
+        }
+        return
+      }
+
+      const normalized = normalizeSqlSingleQuotedTableIds(sql)
+      if (normalized.changed) {
+        sql = normalized.sql
+        patchSession(sessionId, { query: sql })
+      }
 
       startQueryElapsedTimer()
       try {
@@ -732,13 +899,14 @@ export function DbWorkbenchView() {
             )
           }),
         ])
+        if (runId !== queryRunIdRef.current) return
         stopQueryElapsedTimer()
         if (res.error) {
           const msgs = [`Error: ${res.error}`]
-          if (/timed out|lost|closed|ECONNRESET/i.test(res.error)) {
+          if (/timed out|lost|closed|ECONNRESET|cancelled/i.test(res.error)) {
             msgs.push('Connection may be dead — disconnect and reconnect.')
           }
-          updateSessionWorkspace(activeSessionId, (w) => ({
+          updateSessionWorkspace(sessionId, (w) => ({
             queryRunning: false,
             result: res,
             messages: [...w.messages, ...msgs],
@@ -749,22 +917,31 @@ export function DbWorkbenchView() {
           }
         } else {
           const notes: string[] = []
+          if (normalized.changed) {
+            notes.push(
+              'Normalized single-quoted table names to backticks (e.g. FROM \'table\' → FROM `table`).',
+            )
+          }
           if (res.rowCapApplied) {
             notes.push('Auto-added LIMIT 10001 (query had no LIMIT — avoids slow full table scans over SSH).')
+          }
+          if (res.tunnelOptimized) {
+            notes.push('Large TEXT/JSON/BLOB columns were truncated on the server for faster SELECT * preview (2048 chars per cell).')
           }
           if (res.truncated) {
             notes.push('Showing first 10,000 rows (more may exist — add a narrower WHERE or LIMIT).')
           }
-          updateSessionWorkspace(activeSessionId, (w) => ({
+          updateSessionWorkspace(sessionId, (w) => ({
             queryRunning: false,
             result: res,
             messages: notes.length > 0 ? [...w.messages, ...notes] : w.messages,
           }))
         }
       } catch (err) {
+        if (runId !== queryRunIdRef.current) return
         stopQueryElapsedTimer()
         const errMsg = err instanceof Error ? err.message : String(err)
-        updateSessionWorkspace(activeSessionId, (w) => ({
+        updateSessionWorkspace(sessionId, (w) => ({
           queryRunning: false,
           result: null,
           messages: [...w.messages, `Query failed: ${errMsg}`],
@@ -772,22 +949,71 @@ export function DbWorkbenchView() {
         }))
 
         if (/ECONNRESET|EPIPE|lost|closed|timeout/i.test(errMsg)) {
-          setConnectError('Connection lost or query timed out. Reconnect to continue.')
-          void handleDisconnect(activeSessionId)
+          setConnectError('Connection lost or timed out. Retry loading tables or run the query again.')
+        }
+      } finally {
+        if (runId !== queryRunIdRef.current) {
+          updateSessionWorkspace(sessionId, (w) =>
+            w.queryRunning ? { queryRunning: false } : {},
+          )
         }
       }
     },
     [
-      activeSessionId,
       patchSession,
       updateSessionWorkspace,
-      handleDisconnect,
       startQueryElapsedTimer,
       stopQueryElapsedTimer,
     ],
   )
 
-  runQueryRef.current = runQuery
+  const runQuery = useCallback(
+    async (sqlOverride?: string) => {
+      if (!activeSessionId) return
+      await runQueryForSession(activeSessionId, sqlOverride)
+    },
+    [activeSessionId, runQueryForSession],
+  )
+
+  const cancelQueryForSession = useCallback(
+    async (sessionId: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session?.workspace.queryRunning) return
+
+      const connectionId = session.connectionId
+      queryRunIdRef.current += 1
+      stopQueryElapsedTimer()
+      updateSessionWorkspace(sessionId, (w) => ({ queryRunning: false }))
+
+      try {
+        const res = await Promise.race([
+          window.api.dbCancelQuery(connectionId),
+          new Promise<{ success: boolean; error?: string }>((_, reject) => {
+            setTimeout(
+              () => reject(new Error(`Cancel timed out after ${CANCEL_CLIENT_TIMEOUT_MS / 1000}s`)),
+              CANCEL_CLIENT_TIMEOUT_MS,
+            )
+          }),
+        ])
+        updateSessionWorkspace(sessionId, (w) => ({
+          messages: [
+            ...w.messages,
+            res.success ? 'Query cancelled.' : `Cancel failed: ${res.error ?? 'Unknown error'}`,
+          ],
+          activeResultTab: 'messages',
+        }))
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        updateSessionWorkspace(sessionId, (w) => ({
+          messages: [...w.messages, `Cancel failed: ${errMsg}`],
+          activeResultTab: 'messages',
+        }))
+      }
+    },
+    [stopQueryElapsedTimer, updateSessionWorkspace],
+  )
+
+  runQueryRef.current = runQueryForSession
 
   const cmExtensions = useMemo(
     () => [
@@ -825,8 +1051,9 @@ export function DbWorkbenchView() {
     [],
   )
 
-  function renderProducerRow(p: DbProducer, dupes: Set<string>, showKgbInSubtitle: boolean) {
-    const showSubtitle = shouldShowProducerSubtitle(p, dupes) || showKgbInSubtitle
+  function renderProducerRow(p: DbProducer, dupes: Set<string>, showClusterInSubtitle: boolean) {
+    const cluster = producerCluster(p)
+    const showSubtitle = shouldShowProducerSubtitle(p, dupes) || showClusterInSubtitle
     return (
       <button
         key={p.name}
@@ -837,7 +1064,7 @@ export function DbWorkbenchView() {
           <span className="dbw-picker-db-name">{p.dbName}</span>
           {showSubtitle && (
             <span className="dbw-picker-db-sub">
-              {showKgbInSubtitle ? `${p.kgb} · ${p.producer}` : p.producer}
+              {showClusterInSubtitle && cluster ? cluster : p.producer}
             </span>
           )}
         </span>
@@ -845,85 +1072,50 @@ export function DbWorkbenchView() {
     )
   }
 
-  function renderDbFilters(showKgbFilter: boolean, showClusterFilter: boolean) {
-    if (!showKgbFilter && !showClusterFilter) return null
+  function renderDbFilters(showClusterFilter: boolean) {
+    if (!showClusterFilter) return null
     return (
       <div className="dbw-picker-filters">
-        {showKgbFilter && (
-          <label className="dbw-picker-filter">
-            <span>KGB</span>
-            <select
-              className="form-input dbw-picker-filter-select"
-              value={filterKgb}
-              onChange={(e) => setFilterKgb(e.target.value)}
-            >
-              <option value="">All KGB tags</option>
-              {filterKgbOptions.map((kgb) => (
-                <option key={kgb} value={kgb}>
-                  {kgb}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {showClusterFilter && (
-          <label className="dbw-picker-filter">
-            <span>Cluster</span>
-            <select
-              className="form-input dbw-picker-filter-select"
-              value={filterCluster}
-              onChange={(e) => setFilterCluster(e.target.value)}
-            >
-              <option value="">All clusters</option>
-              {filterClusterOptions.map((cluster) => (
-                <option key={cluster} value={cluster}>
-                  {cluster}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+        <label className="dbw-picker-filter">
+          <span>Cluster</span>
+          <select
+            className="form-input dbw-picker-filter-select"
+            value={filterCluster}
+            onChange={(e) => setFilterCluster(e.target.value)}
+          >
+            <option value="">All clusters</option>
+            {filterClusterOptions.map((cluster) => (
+              <option key={cluster} value={cluster}>
+                {cluster}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
     )
   }
 
   function renderPickerModal() {
-    const showingKgbDatabases = pickerMode === 'kgb' && selectedKgb !== null
     const showingClusterDatabases = pickerMode === 'cluster' && selectedCluster !== null
-    const showingDatabases = showingKgbDatabases || showingClusterDatabases
     const showingGlobalSearch =
-      (pickerMode === 'kgb' || pickerMode === 'cluster') && searchActive && !showingDatabases
+      pickerMode === 'cluster' && searchActive && !showingClusterDatabases
     const showingDatabaseBrowse = pickerMode === 'database'
-    const showingDbFilters = showingDatabases || showingDatabaseBrowse || showingGlobalSearch
+    const showingDbFilters =
+      showingClusterDatabases || showingDatabaseBrowse || showingGlobalSearch
     const globalDupes = duplicateDbNames(globalSearchMatches)
 
     return (
       <div className="modal-overlay" onClick={() => setShowPicker(false)}>
         <div className="dbw-picker-modal" onClick={(e) => e.stopPropagation()}>
           <h2>
-            {showingKgbDatabases ? (
-              <>
-                <button
-                  className="dbw-picker-back"
-                  onClick={() => {
-                    setSelectedKgb(null)
-                    setProducerSearch('')
-                    setFilterCluster('')
-                  }}
-                  title="Back to KGB tags"
-                >
-                  &#8592;
-                </button>
-                {selectedKgb}
-              </>
-            ) : showingClusterDatabases ? (
+            {showingClusterDatabases ? (
               <>
                 <button
                   className="dbw-picker-back"
                   onClick={() => {
                     setSelectedCluster(null)
                     setProducerSearch('')
-                    setFilterKgb('')
+                    setFilterCluster('')
                   }}
                   title="Back to clusters"
                 >
@@ -935,35 +1127,18 @@ export function DbWorkbenchView() {
               'Search Results'
             ) : showingDatabaseBrowse ? (
               'Browse databases'
-            ) : pickerMode === 'cluster' ? (
-              'Select cluster'
             ) : (
-              'Select KGB tag'
+              'Connect to database'
             )}
           </h2>
 
           <div className="dbw-picker-mode-tabs">
             <button
               type="button"
-              className={`dbw-picker-mode-tab ${pickerMode === 'kgb' ? 'active' : ''}`}
-              onClick={() => {
-                setPickerMode('kgb')
-                setSelectedKgb(null)
-                setSelectedCluster(null)
-                setFilterKgb('')
-                setFilterCluster('')
-              }}
-            >
-              By KGB
-            </button>
-            <button
-              type="button"
               className={`dbw-picker-mode-tab ${pickerMode === 'cluster' ? 'active' : ''}`}
               onClick={() => {
                 setPickerMode('cluster')
-                setSelectedKgb(null)
                 setSelectedCluster(null)
-                setFilterKgb('')
                 setFilterCluster('')
               }}
             >
@@ -974,9 +1149,7 @@ export function DbWorkbenchView() {
               className={`dbw-picker-mode-tab ${pickerMode === 'database' ? 'active' : ''}`}
               onClick={() => {
                 setPickerMode('database')
-                setSelectedKgb(null)
                 setSelectedCluster(null)
-                setFilterKgb('')
                 setFilterCluster('')
               }}
             >
@@ -990,25 +1163,16 @@ export function DbWorkbenchView() {
             type="text"
             placeholder={
               showingDatabaseBrowse
-                ? 'Search database name, cluster, producer, or KGB tag...'
-                : showingKgbDatabases
-                  ? 'Search databases in this KGB...'
-                  : showingClusterDatabases
-                    ? 'Search databases in this cluster...'
-                    : pickerMode === 'cluster'
-                      ? 'Search cluster names or database names...'
-                      : 'Search KGB tags or database names...'
+                ? 'Search database name, cluster, or producer...'
+                : showingClusterDatabases
+                  ? 'Search databases in this cluster...'
+                  : 'Search cluster names or database names...'
             }
             value={producerSearch}
             onChange={(e) => setProducerSearch(e.target.value)}
           />
 
-          {renderDbFilters(
-            showingDbFilters &&
-              (showingClusterDatabases || showingDatabaseBrowse || showingGlobalSearch),
-            showingDbFilters &&
-              (showingKgbDatabases || showingDatabaseBrowse || showingGlobalSearch),
-          )}
+          {renderDbFilters(showingDbFilters)}
 
           {connectError && (
             <div className="dbw-error-banner" style={{ margin: '0 0 8px' }}>
@@ -1051,9 +1215,9 @@ export function DbWorkbenchView() {
                     : 'No databases available'}
                 </div>
               ) : (
-                databaseBrowseGroups.map(({ kgb, producers: group }) => (
-                  <div key={kgb} className="dbw-picker-group">
-                    <div className="dbw-picker-group-label">{kgb}</div>
+                databaseBrowseGroups.map(({ cluster, producers: group }) => (
+                  <div key={cluster} className="dbw-picker-group">
+                    <div className="dbw-picker-group-label">{cluster}</div>
                     {group.map((p) => renderProducerRow(p, databaseBrowseDupes, true))}
                   </div>
                 ))
@@ -1063,17 +1227,10 @@ export function DbWorkbenchView() {
                 <div className="dbw-picker-empty">
                   {`No results for "${producerSearch}"`}
                 </div>
-              ) : pickerMode === 'cluster' ? (
+              ) : (
                 globalSearchClusterGroups.map(({ cluster, producers: group }) => (
                   <div key={cluster} className="dbw-picker-group">
                     <div className="dbw-picker-group-label">{cluster}</div>
-                    {group.map((p) => renderProducerRow(p, globalDupes, true))}
-                  </div>
-                ))
-              ) : (
-                globalSearchKgbGroups.map(({ kgb, producers: group }) => (
-                  <div key={kgb} className="dbw-picker-group">
-                    <div className="dbw-picker-group-label">{kgb}</div>
                     {group.map((p) => renderProducerRow(p, globalDupes, true))}
                   </div>
                 ))
@@ -1102,33 +1259,6 @@ export function DbWorkbenchView() {
                   </button>
                 ))
               )
-            ) : pickerMode === 'kgb' && !showingKgbDatabases ? (
-              filteredKgbTags.length === 0 ? (
-                <div className="dbw-picker-empty">
-                  {kgbTags.length === 0
-                    ? 'No KGB tags available'
-                    : `No results for "${producerSearch}"`}
-                </div>
-              ) : (
-                filteredKgbTags.map((kgb) => {
-                  const count = producers.filter((p) => p.kgb === kgb).length
-                  return (
-                    <button
-                      key={kgb}
-                      className="dbw-picker-item"
-                      onClick={() => {
-                        setSelectedKgb(kgb)
-                        setProducerSearch('')
-                      }}
-                    >
-                      <span className="dbw-picker-db-name">{kgb}</span>
-                      <span className="dbw-picker-db-count">
-                        {count} database{count !== 1 ? 's' : ''}
-                      </span>
-                    </button>
-                  )
-                })
-              )
             ) : showingClusterDatabases ? (
               clusterDatabases.length === 0 ? (
                 <div className="dbw-picker-empty">
@@ -1137,13 +1267,7 @@ export function DbWorkbenchView() {
               ) : (
                 clusterDatabases.map((p) => renderProducerRow(p, clusterDupes, true))
               )
-            ) : kgbDatabases.length === 0 ? (
-              <div className="dbw-picker-empty">
-                {`No results for "${producerSearch}"`}
-              </div>
-            ) : (
-              kgbDatabases.map((p) => renderProducerRow(p, kgbDupes, false))
-            )}
+            ) : null}
           </div>
 
           <div className="modal-actions">
@@ -1232,22 +1356,6 @@ export function DbWorkbenchView() {
 
   /* ── Render: Connected ── */
 
-
-  function renderNullCell() {
-    return <span className="dbw-null">NULL</span>
-  }
-
-  function renderCellValue(value: any) {
-    if (value === null || value === undefined) return renderNullCell()
-    if (typeof value === 'object') {
-      // mysql2 serializes BINARY/VARBINARY (GUIDs) as {type:"Buffer",data:[...]} or {"0":n,"1":n,...}
-      const bytes = bufferToBytes(value)
-      if (bytes) return formatGuid(bytes)
-      return JSON.stringify(value)
-    }
-    return String(value)
-  }
-
   return (
     <div className="dbw-view">
       {/* ── Toolbar ── */}
@@ -1275,7 +1383,7 @@ export function DbWorkbenchView() {
               <button
                 className="btn btn-sm"
                 type="button"
-                onClick={() => void fetchTables(activeSessionId)}
+                onClick={() => void fetchTables(activeSessionId, true)}
               >
                 Refresh
               </button>
@@ -1314,11 +1422,11 @@ export function DbWorkbenchView() {
                 role="tab"
                 aria-selected={s.id === activeSessionId}
                 className={`dbw-session-tab ${s.id === activeSessionId ? 'active' : ''}`}
-                onClick={() => setActiveSessionId(s.id)}
+                onClick={() => selectSessionTab(s.id)}
                 title={s.label}
               >
                 <span className="dbw-session-tab-label">{s.dbName}</span>
-                <span className="dbw-session-tab-sub">{s.kgb}</span>
+                <span className="dbw-session-tab-sub">{s.cluster}</span>
               </button>
               <button
                 type="button"
@@ -1342,242 +1450,30 @@ export function DbWorkbenchView() {
         </div>
 
         <div className="dbw-workspace">
-        <div className="dbw-sidebar">
-          <div className="dbw-sidebar-header">
-            <span className="dbw-sidebar-title">{activeSession?.dbName ?? ''}</span>
-            <span className="dbw-sidebar-count">
-              {ws?.tablesLoading && (ws?.tables.length ?? 0) > 0
-                ? 'Refreshing…'
-                : `${ws?.tables.length ?? 0} table${(ws?.tables.length ?? 0) !== 1 ? 's' : ''}`}
-            </span>
-          </div>
-
-          <div className="dbw-sidebar-list">
-            {ws?.tablesError ? (
-              <div className="dbw-sidebar-error">
-                <div>{ws.tablesError}</div>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => activeSessionId && void fetchTables(activeSessionId)}
-                >
-                  Retry
-                </button>
-              </div>
-            ) : ws?.tablesLoading && (ws?.tables.length ?? 0) === 0 ? (
-              <div className="dbw-sidebar-loading">Loading tables...</div>
-            ) : (ws?.tables.length ?? 0) === 0 ? (
-              <div className="dbw-sidebar-empty">
-                {ws?.tablesLoading ? 'Loading tables...' : 'No tables found'}
-              </div>
-            ) : (
-              ws!.tables.map((t) => {
-                const isExpanded = ws!.expandedTable === t.name
-                const cols = ws!.tableColumns[t.name]
-                const isLoadingCols = ws!.columnsLoading === t.name
-
-                return (
-                  <div key={t.name} className="dbw-table-node">
-                    <div className="dbw-table-row">
-                      <button
-                        className={`dbw-table-expand ${isExpanded ? 'expanded' : ''}`}
-                        onClick={() => toggleTable(t.name)}
-                        title="Show columns"
-                      >
-                        &#9656;
-                      </button>
-                      <button
-                        className="dbw-table-name"
-                        onClick={() => handleTableClick(t.name)}
-                        title={`SELECT * FROM ${t.name} LIMIT 100`}
-                      >
-                        {t.name}
-                      </button>
-                      {t.type === 'VIEW' && <span className="dbw-table-badge">VIEW</span>}
-                    </div>
-
-                    {isExpanded && (
-                      <div className="dbw-columns-list">
-                        {isLoadingCols ? (
-                          <div className="dbw-col-loading">Loading...</div>
-                        ) : cols ? (
-                          cols.map((col) => (
-                            <div key={col.name} className="dbw-col-row">
-                              <span className={`dbw-col-key ${col.key === 'PRI' ? 'pk' : col.key === 'MUL' ? 'idx' : ''}`}>
-                                {col.key === 'PRI' ? '\u{1D4C}' : col.key === 'MUL' ? '\u25CB' : '\u2500'}
-                              </span>
-                              <span className="dbw-col-name">{col.name}</span>
-                              <span className="dbw-col-type">{col.type}</span>
-                            </div>
-                          ))
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </div>
-
-        {/* ── Right Panel ── */}
-        <div className="dbw-right">
-          {/* ── SQL Editor ── */}
-          <div className="dbw-editor-panel">
-            <div className="dbw-editor-toolbar">
-              <span className="dbw-editor-label">SQL Editor</span>
-              <span className="dbw-editor-hint">
-                <kbd className="kbd">&#8984;</kbd>
-                <span className="kbd-plus">+</span>
-                <kbd className="kbd">Enter</kbd>
-                <span className="dbw-hint-text">to run</span>
-              </span>
-              <button
-                className="btn btn-sm btn-primary dbw-run-btn"
-                type="button"
-                onClick={() => void runQuery()}
-                disabled={!activeSession || ws?.queryRunning || !ws?.query.trim()}
-              >
-                {ws?.queryRunning ? 'Running...' : 'Run \u25B6'}
-              </button>
-            </div>
-            <div className="dbw-editor-wrapper">
-              <CodeMirror
-                value={ws?.query ?? ''}
-                onChange={(val) => patchActiveSession({ query: val })}
-                extensions={cmExtensions}
-                theme="dark"
-                height="100%"
-                basicSetup={{
-                  lineNumbers: true,
-                  foldGutter: false,
-                  autocompletion: true,
-                  highlightActiveLine: true,
-                  bracketMatching: true,
-                  closeBrackets: true,
-                }}
-              />
-            </div>
-          </div>
-
-          {/* ── Results Panel ── */}
-          <div className="dbw-results-panel">
-            <div className="dbw-results-toolbar">
-              <div className="dbw-results-tabs">
-                <button
-                  type="button"
-                  className={`dbw-results-tab ${ws?.activeResultTab === 'results' ? 'active' : ''}`}
-                  onClick={() => patchActiveSession({ activeResultTab: 'results' })}
-                >
-                  Results
-                </button>
-                <button
-                  type="button"
-                  className={`dbw-results-tab ${ws?.activeResultTab === 'messages' ? 'active' : ''}`}
-                  onClick={() => patchActiveSession({ activeResultTab: 'messages' })}
-                >
-                  Messages
-                  {(ws?.messages.length ?? 0) > 0 && (
-                    <span className="dbw-msg-count">{ws!.messages.length}</span>
-                  )}
-                </button>
-              </div>
-              {ws?.activeResultTab === 'results' && ws.result && !ws.result.error && (
-                <span className="dbw-results-meta">
-                  {ws.result.rowCount} row{ws.result.rowCount !== 1 ? 's' : ''}
-                  {' \u00B7 '}
-                  {formatMs(ws.result.executionTimeMs)}
-                  {ws.result.affectedRows > 0 && ` \u00B7 ${ws.result.affectedRows} affected`}
-                </span>
-              )}
-              {ws?.activeResultTab === 'messages' && (ws?.messages.length ?? 0) > 0 && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => patchActiveSession({ messages: [] })}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-
-            <div className="dbw-results-content">
-              {ws?.activeResultTab === 'results' ? (
-                ws.queryRunning ? (
-                  <div className="dbw-results-loading">
-                    <div className="dbw-connecting-spinner dbw-spinner-sm" />
-                    <span>
-                      Executing query
-                      {queryElapsedSec > 0 ? ` (${queryElapsedSec}s)` : '…'}
-                    </span>
-                    <span className="dbw-results-loading-hint">
-                      Over SSH tunnels large scans can take up to 90s. Add LIMIT for faster results.
-                    </span>
-                  </div>
-                ) : ws.result?.error ? (
-                  <div className="dbw-results-error">
-                    <span className="dbw-error-icon">!</span>
-                    <pre>{ws.result.error}</pre>
-                  </div>
-                ) : ws.result && ws.result.columns.length > 0 ? (
-                  <div className="dbw-table-scroll">
-                    <table className="dbw-results-table">
-                      <thead>
-                        <tr>
-                          <th className="dbw-row-num">#</th>
-                          {ws.result.columns.map((col) => (
-                            <th key={col.name}>
-                              <span className="dbw-th-name">{col.name}</span>
-                              <span className="dbw-th-type">{col.type}</span>
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {ws.result.rows.map((row, ri) => (
-                          <tr key={ri}>
-                            <td className="dbw-row-num">{ri + 1}</td>
-                            {row.map((cell, ci) => (
-                              <td key={ci}>{renderCellValue(cell)}</td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : ws.result && ws.result.affectedRows > 0 ? (
-                  <div className="dbw-results-message-ok">
-                    Query OK, {ws.result.affectedRows} row{ws.result.affectedRows !== 1 ? 's' : ''} affected
-                    ({formatMs(ws.result.executionTimeMs)})
-                  </div>
-                ) : !ws.result ? (
-                  <div className="dbw-results-empty">
-                    Run a query to see results here
-                  </div>
-                ) : (
-                  <div className="dbw-results-empty">
-                    Query returned no rows ({formatMs(ws.result.executionTimeMs)})
-                  </div>
-                )
-              ) : (
-                <div className="dbw-messages-list">
-                  {(ws?.messages.length ?? 0) === 0 ? (
-                    <div className="dbw-results-empty">No messages</div>
-                  ) : (
-                    ws!.messages.map((msg, i) => (
-                      <div
-                        key={i}
-                        className={`dbw-message-item ${/^Error|^Query failed/i.test(msg) ? 'error' : ''}`}
-                      >
-                        {msg}
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+          {sessions.map((s) => (
+            <DbSessionWorkspacePanel
+              key={s.id}
+              sessionId={s.id}
+              dbName={s.dbName}
+              workspace={s.workspace}
+              isActive={s.id === activeSessionId}
+              queryElapsedSec={s.id === activeSessionId ? queryElapsedSec : 0}
+              tablePreviewLimit={TABLE_PREVIEW_LIMIT}
+              resultsDisplayCap={RESULTS_DISPLAY_CAP}
+              cmExtensions={cmExtensions}
+              formatMs={formatMs}
+              renderCellValue={renderCellValue}
+              onQueryChange={(query) => patchSession(s.id, { query })}
+              onRunQuery={(sql) => void runQueryForSession(s.id, sql)}
+              onCancelQuery={() => void cancelQueryForSession(s.id)}
+              onFetchTables={() => void fetchTables(s.id, true)}
+              onToggleTable={(tableName) => void toggleTableForSession(s.id, tableName)}
+              onRetryColumns={(tableName) => retryColumnsForSession(s.id, tableName)}
+              onTableClick={(tableName) => handleTableClickForSession(s.id, tableName)}
+              onActiveResultTab={(tab) => patchSession(s.id, { activeResultTab: tab })}
+              onClearMessages={() => patchSession(s.id, { messages: [] })}
+            />
+          ))}
         </div>
       </div>
     </div>

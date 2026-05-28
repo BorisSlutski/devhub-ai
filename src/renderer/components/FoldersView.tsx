@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, memo, useMemo, useRef } from 'react'
 import { WorkspaceFolder } from '../../shared/types'
+import type { AgentProvider } from '../../shared/agent-provider'
 import type { GitFolderMeta, GitPullOptions, GitSyncStatus } from '../../shared/ipc-types'
 import { Skeleton } from './Skeleton'
 import { PullConfirmModal, type PullConfirmChoice } from './PullConfirmModal'
@@ -11,7 +12,7 @@ interface Props {
   foldersSortBy?: 'name' | 'recent'
   onToggleFavorite?: (path: string) => void
   onFoldersSortByChange?: (sortBy: 'name' | 'recent') => void
-  onStartClaudeSession?: (folder: WorkspaceFolder, useWorktree: boolean) => void
+  onStartSession?: (folder: WorkspaceFolder, useWorktree: boolean, provider: AgentProvider) => void
 }
 
 function timeAgo(dateStr: string): string {
@@ -90,7 +91,7 @@ const FolderRow = memo(function FolderRow({
   folder,
   isFavorite,
   onToggleFavorite,
-  onStartClaudeSession,
+  onStartSession,
   gitInfo,
   syncStatus,
   pulling,
@@ -101,7 +102,7 @@ const FolderRow = memo(function FolderRow({
   folder: WorkspaceFolder
   isFavorite: boolean
   onToggleFavorite?: (path: string) => void
-  onStartClaudeSession?: (folder: WorkspaceFolder, useWorktree: boolean) => void
+  onStartSession?: (folder: WorkspaceFolder, useWorktree: boolean, provider: AgentProvider) => void
   gitInfo: GitInfo | null | undefined
   syncStatus: GitSyncStatus | undefined
   pulling: boolean
@@ -113,10 +114,10 @@ const FolderRow = memo(function FolderRow({
     window.api.openInIde(folder.path, ide)
   }
 
-  const handleClaudeSession = () => {
-    if (onStartClaudeSession) {
+  const handleStartSession = (provider: AgentProvider) => {
+    if (onStartSession) {
       const isGit = gitInfo != null && gitInfo.gitBranch !== null
-      onStartClaudeSession(folder, isGit)
+      onStartSession(folder, isGit, provider)
     }
   }
 
@@ -224,16 +225,32 @@ const FolderRow = memo(function FolderRow({
           <button
             type="button"
             className="btn btn-sm btn-ide claude-btn"
-            onClick={handleClaudeSession}
-            title="Open Claude session"
+            onClick={() => handleStartSession('claude')}
+            title="Start Claude session in DevHub-AI"
           >
             Claude
           </button>
           <button
             type="button"
             className="btn btn-sm btn-ide cursor-btn"
+            onClick={() => handleStartSession('cursor')}
+            title="Start Cursor Agent CLI session in DevHub-AI"
+          >
+            Agent
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ide shell-btn"
+            onClick={() => handleStartSession('shell')}
+            title="Start shell-only session in DevHub-AI"
+          >
+            Shell
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ide cursor-ide-btn"
             onClick={() => handleOpenIde('cursor')}
-            title="Open in Cursor"
+            title="Open in Cursor IDE"
           >
             Cursor
           </button>
@@ -281,7 +298,7 @@ export function FoldersView({
   foldersSortBy = 'name',
   onToggleFavorite,
   onFoldersSortByChange,
-  onStartClaudeSession,
+  onStartSession,
 }: Props) {
   const [folders, setFolders] = useState<WorkspaceFolder[]>([])
   const [search, setSearch] = useState('')
@@ -674,7 +691,7 @@ export function FoldersView({
               folder={folder}
               isFavorite={favoriteSet.has(folder.path)}
               onToggleFavorite={onToggleFavorite}
-              onStartClaudeSession={onStartClaudeSession}
+              onStartSession={onStartSession}
               gitInfo={
                 metaMap.has(folder.path)
                   ? {

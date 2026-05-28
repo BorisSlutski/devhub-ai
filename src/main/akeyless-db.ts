@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { BrowserWindow } from 'electron'
 import { mysqlClient } from './mysql-client'
+import { parseProducerPathFields } from '../shared/db-picker'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -13,6 +14,8 @@ export interface DbProducer {
   name: string // full path e.g. /prod/dba/developer-access/mysql/<kgb-tag>/.../<producer-leaf>
   /** KGB ownership tag (path segment after mysql|mongo), e.g. kgb-aglianico — not a DB cluster. */
   kgb: string
+  /** Akeyless folder cluster (last path segment before producer leaf), e.g. locality_common_us. */
+  cluster: string
   /** Akeyless producer item leaf (host routing id), e.g. db-mysql-preprod-self-service5a.42-mydb */
   producer: string
   /** MySQL/Mongo database (schema) name parsed from the producer leaf. */
@@ -198,15 +201,15 @@ function typeFromPath(name: string): 'mysql' | 'mongo' {
 
 /**
  * Parses a producer path for picker display.
- * Path: /prod/dba/developer-access/mysql/<kgb-tag>/.../<producer-leaf>
+ * Path: /prod/dba/developer-access/mysql/<kgb-tag>/.../<cluster-folder>/<producer-leaf>
  */
-function parseProducerPath(name: string): { kgb: string; producer: string; dbName: string } {
-  const parts = name.split('/').filter(Boolean)
-  const typeIdx = parts.findIndex((p) => p === 'mysql' || p === 'mongo')
-  const kgb = typeIdx >= 0 ? (parts[typeIdx + 1] ?? '') : ''
-  const leaf = parts[parts.length - 1] ?? ''
-  const dbName = dbNameFromLeaf(leaf)
-  return { kgb, producer: leaf, dbName }
+function parseProducerPath(name: string): {
+  kgb: string
+  cluster: string
+  producer: string
+  dbName: string
+} {
+  return parseProducerPathFields(name)
 }
 
 /** e.g. pdb-mysql-billing0a.42-wix_billing → wix_billing */
@@ -223,7 +226,7 @@ function isTransientCliError(msg: string): boolean {
   )
 }
 
-/** Disk cache may predate kgb/producer field names (was cluster/database). */
+/** Disk cache may predate kgb/producer/cluster field names. */
 function normalizeCachedProducer(raw: Record<string, unknown>): DbProducer | null {
   const name = typeof raw.name === 'string' ? raw.name : ''
   if (!name) return null
@@ -231,8 +234,8 @@ function normalizeCachedProducer(raw: Record<string, unknown>): DbProducer | nul
   const kgb =
     typeof raw.kgb === 'string'
       ? raw.kgb
-      : typeof raw.cluster === 'string'
-        ? raw.cluster
+      : typeof raw.cluster === 'string' && String(raw.cluster).startsWith('kgb-')
+        ? String(raw.cluster)
         : parsed.kgb
   const producer =
     typeof raw.producer === 'string'
@@ -240,10 +243,14 @@ function normalizeCachedProducer(raw: Record<string, unknown>): DbProducer | nul
       : typeof raw.database === 'string'
         ? raw.database
         : parsed.producer
+  const cluster =
+    typeof raw.cluster === 'string' && !String(raw.cluster).startsWith('kgb-')
+      ? String(raw.cluster)
+      : parsed.cluster
   const dbName = typeof raw.dbName === 'string' ? raw.dbName : parsed.dbName
   const type =
     raw.type === 'mysql' || raw.type === 'mongo' ? raw.type : typeFromPath(name)
-  return { name, kgb, producer, dbName, type }
+  return { name, kgb, cluster, producer, dbName, type }
 }
 
 function readDiskProducersCache(): { at: number; producers: DbProducer[] } | null {
@@ -287,8 +294,8 @@ function parseListItemsToProducers(stdout: string, dbType: 'mysql' | 'mongo'): D
       const match = line.match(/"item_name"\s*:\s*"([^"]+)"/)
       if (!match) continue
       const name = match[1]
-      const { kgb, producer, dbName } = parseProducerPath(name)
-      results.push({ name, kgb, producer, dbName, type: dbType })
+      const { kgb, cluster, producer, dbName } = parseProducerPath(name)
+      results.push({ name, kgb, cluster, producer, dbName, type: dbType })
     }
     return results
   }
@@ -297,12 +304,13 @@ function parseListItemsToProducers(stdout: string, dbType: 'mysql' | 'mongo'): D
   for (const item of items) {
     const name: string = item.item_name ?? item.name ?? ''
     if (!name) continue
-    const { kgb, producer, dbName } = parseProducerPath(name)
+    const { kgb, cluster, producer, dbName } = parseProducerPath(name)
     const sra = item?.item_general_info?.secure_remote_access_details
     const resolvedDbName: string = sra?.db_name ?? dbName
     results.push({
       name,
       kgb,
+      cluster,
       producer,
       dbName: resolvedDbName,
       type: dbType,
@@ -731,6 +739,13 @@ export function getActiveTunnels(): Omit<TunnelInfo, 'process'>[] {
   return tunnels
 }
 
+export function getTunnel(tunnelId: string): Omit<TunnelInfo, 'process'> | null {
+  const tunnel = activeTunnels.get(tunnelId)
+  if (!tunnel) return null
+  const { process: _proc, ...serializable } = tunnel
+  return serializable
+}
+
 /**
  * Kills all active tunnel processes. Intended for app shutdown cleanup.
  */
@@ -752,6 +767,7 @@ export const akeylessDb = {
   openTunnel,
   closeTunnel,
   getActiveTunnels,
+  getTunnel,
   closeAllTunnels,
   setAkeylessDbMainWindow,
 }

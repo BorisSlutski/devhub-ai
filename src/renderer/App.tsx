@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useAppState } from './hooks/useAppState'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import { useGridNavigation } from './hooks/useGridNavigation'
-import { useClaudeSessions } from './hooks/useClaudeSessions'
+import { useAgentSessions } from './hooks/useClaudeSessions'
 import { Sidebar } from './components/Sidebar'
 import { ProjectCard } from './components/ProjectCard'
 import { EditProjectModal } from './components/EditProjectModal'
@@ -22,7 +22,7 @@ import { Skeleton } from './components/Skeleton'
 import { Project } from '../shared/types'
 import appIcon from '../../resources/icon.png'
 
-type TabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access'
+type TabId = 'launchpad' | 'folders' | 'sessions' | 'agents' | 'db-access'
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>('launchpad')
@@ -60,7 +60,8 @@ export function App() {
     if (!loaded || hydratedRef.current) return
     hydratedRef.current = true
     const tab = state.activeTab as string | undefined
-    if (tab && tab !== 'airflow') setActiveTab(state.activeTab!)
+    if (tab === 'claude') setActiveTab('sessions')
+    else if (tab && tab !== 'airflow') setActiveTab(state.activeTab as TabId)
     if (state.selectedProjectId) setSelectedProjectId(state.selectedProjectId)
   }, [loaded, state.activeTab, state.selectedProjectId])
 
@@ -104,10 +105,10 @@ export function App() {
     closeSession: handleCloseClaudeSession,
     launchPreset: handleLaunchPreset,
     updateSessionMeta: handleUpdateSessionMeta,
-  } = useClaudeSessions({
+  } = useAgentSessions({
     dangerousMode: state.dangerousMode ?? false,
     defaultModel: state.defaultModel,
-    onSessionActivated: () => setActiveTab('claude'),
+    onSessionActivated: () => setActiveTab('sessions'),
     onNewSessionModalClosed: () => setShowNewSession(false),
   })
 
@@ -126,8 +127,9 @@ export function App() {
     },
     onTab1: () => setActiveTab('launchpad'),
     onTab2: () => setActiveTab('folders'),
-    onTab3: () => setActiveTab('claude'),
+    onTab3: () => setActiveTab('sessions'),
     onTab4: () => setActiveTab('agents'),
+    onTab5: () => setActiveTab('db-access'),
     onEscape: () => {
       // Don't close modals if user is typing in an input inside the modal
       const active = document.activeElement as HTMLElement | null
@@ -160,8 +162,9 @@ export function App() {
   const paletteActions = useMemo((): PaletteAction[] => [
     { id: 'tab-launchpad', label: 'Go to Launchpad', group: 'Navigation', run: () => setActiveTab('launchpad') },
     { id: 'tab-folders', label: 'Go to All Folders', group: 'Navigation', run: () => setActiveTab('folders') },
-    { id: 'tab-claude', label: 'Go to Claude Sessions', group: 'Navigation', run: () => setActiveTab('claude') },
-    { id: 'new-session', label: 'New Claude session', group: 'Sessions', keywords: 'terminal', run: () => { setActiveTab('claude'); setShowNewSession(true) } },
+    { id: 'tab-sessions', label: 'Go to Sessions', group: 'Navigation', run: () => setActiveTab('sessions') },
+    { id: 'tab-db', label: 'Go to DB Access', group: 'Navigation', run: () => setActiveTab('db-access') },
+    { id: 'new-session', label: 'New session', group: 'Sessions', keywords: 'terminal claude', run: () => { setActiveTab('sessions'); setShowNewSession(true) } },
     { id: 'settings', label: 'Open Settings', group: 'App', run: () => setShowSettings(true) },
     { id: 'help', label: 'Keyboard shortcuts', group: 'App', run: () => setShowHelp(true) },
   ], [])
@@ -479,11 +482,11 @@ export function App() {
           All Folders
         </div>
         <div
-          className={`tab ${activeTab === 'claude' ? 'active' : ''}`}
-          onClick={() => setActiveTab('claude')}
+          className={`tab ${activeTab === 'sessions' ? 'active' : ''}`}
+          onClick={() => setActiveTab('sessions')}
           title={waitingClaudeIds.length > 0 ? `${waitingClaudeIds.length} session(s) waiting for input` : undefined}
         >
-          Claude
+          Sessions
           {waitingClaudeIds.length > 0 && (
             <span
               className="tab-waiting-dot"
@@ -527,7 +530,7 @@ export function App() {
         <ErrorBoundary name="Agents">
           <AgentsView />
         </ErrorBoundary>
-      ) : activeTab === 'claude' ? (
+      ) : activeTab === 'sessions' ? (
         <ErrorBoundary name="Claude Sessions">
           <ClaudeSessionsView
             sessions={claudeSessions}
@@ -553,8 +556,8 @@ export function App() {
             foldersSortBy={state.foldersSortBy ?? 'name'}
             onToggleFavorite={handleToggleFavoriteFolder}
             onFoldersSortByChange={handleFoldersSortByChange}
-            onStartClaudeSession={(folder, useWorktree) => {
-              handleStartClaudeSession(folder, useWorktree)
+            onStartSession={(folder, useWorktree, provider) => {
+              handleStartClaudeSession(folder, useWorktree, provider)
             }}
           />
         </ErrorBoundary>

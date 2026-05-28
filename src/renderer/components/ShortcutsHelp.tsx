@@ -9,8 +9,9 @@ const shortcuts = [
   { keys: ['Cmd', 'K'], desc: 'Focus search (clear in terminal)' },
   { keys: ['Cmd', '1'], desc: 'Launchpad tab' },
   { keys: ['Cmd', '2'], desc: 'All Folders tab' },
-  { keys: ['Cmd', '3'], desc: 'Claude tab' },
+  { keys: ['Cmd', '3'], desc: 'Sessions tab' },
   { keys: ['Cmd', '4'], desc: 'Agents tab' },
+  { keys: ['Cmd', '5'], desc: 'DB Access tab' },
   { keys: ['Esc'], desc: 'Close modal / exit select mode' },
   { keys: ['?'], desc: 'Show this help' },
 ]
