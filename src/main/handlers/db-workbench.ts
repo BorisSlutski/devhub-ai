@@ -25,21 +25,39 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 
 /** Reopen MySQL on the existing SSH tunnel when the socket was dropped (timeout/cancel). */
 async function ensureDbConnection(connectionId: string): Promise<string | null> {
+  let tunnel = akeylessDb.getTunnel(connectionId)
+  if (!tunnel) {
+    const meta = akeylessDb.getConnectionMeta(connectionId)
+    if (!meta) {
+      return 'SSH tunnel is closed. Disconnect this tab and connect again.'
+    }
+    try {
+      console.log(`[db-workbench] tunnel missing for ${connectionId}, reopening SSH…`)
+      const reopened = await akeylessDb.reopenTunnel(connectionId)
+      await waitForLocalPort(reopened.localPort)
+      tunnel = akeylessDb.getTunnel(connectionId)
+      if (!tunnel) {
+        return 'SSH tunnel failed to reopen. Try Reconnect or connect again.'
+      }
+    } catch (err: any) {
+      return err?.message ?? String(err)
+    }
+  }
+
   if (mysqlClient.isConnected(connectionId)) return null
 
-  const tunnel = akeylessDb.getTunnel(connectionId)
-  if (!tunnel) {
-    return 'SSH tunnel is closed. Disconnect this tab and connect again.'
+  if (mysqlClient.isQueryInFlight(connectionId)) {
+    return 'A query is still running — wait or cancel before reconnecting.'
   }
 
   const reconnect = async (user: string, password: string) => {
     await mysqlClient.reconnect(
       connectionId,
       '127.0.0.1',
-      tunnel.localPort,
+      tunnel!.localPort,
       user,
       password,
-      tunnel.dbName,
+      tunnel!.dbName,
     )
     registerDbConnection(connectionId)
   }
@@ -190,6 +208,7 @@ export function registerDbWorkbenchHandlers() {
       clearDbConnectionIdle(connectionId)
       await mysqlClient.disconnect(connectionId)
       akeylessDb.closeTunnel(connectionId) // tunnel ID matches connection ID
+      akeylessDb.clearConnectionMeta(connectionId)
       return { success: true }
     } catch (err: any) {
       return { success: false, error: err.message }
@@ -197,6 +216,7 @@ export function registerDbWorkbenchHandlers() {
   })
 
   ipcMain.handle('db-reconnect', async (_event, connectionId: string) => {
+    touchConnection(connectionId)
     try {
       const err = await ensureDbConnectionWithTimeout(connectionId)
       return err ? { success: false, error: err } : { success: true }
@@ -225,6 +245,8 @@ export function registerDbWorkbenchHandlers() {
       }
     }
     const started = Date.now()
+    const preview = sqlText.trim().replace(/\s+/g, ' ').slice(0, 120)
+    console.log(`[db-workbench] query start connection=${connectionId} ensure=${ensureMs}ms sql=${preview}`)
     try {
       const result = await mysqlClient.executeQuery(connectionId, sqlText)
       console.log(
@@ -267,9 +289,13 @@ export function registerDbWorkbenchHandlers() {
       }
       const started = Date.now()
       try {
-        const tables = await mysqlClient.listTables(connectionId, undefined, {
-          forceRefresh: forceRefresh === true,
-        })
+        const tables = await withTimeout(
+          mysqlClient.listTables(connectionId, undefined, {
+            forceRefresh: forceRefresh === true,
+          }),
+          55_000,
+          'List tables timed out after 55s',
+        )
         console.log(
           `[db-workbench] list-tables ok connection=${connectionId} count=${tables.length} ms=${Date.now() - started}`,
         )
@@ -284,16 +310,36 @@ export function registerDbWorkbenchHandlers() {
     },
   )
 
-  // Describe a table's columns
+  // Describe a table's columns (uses cache when SELECT * preview already ran DESCRIBE)
   ipcMain.handle('db-describe-table', async (_event, connectionId: string, tableName: string) => {
     touchConnection(connectionId)
-    const ensureErr = await ensureDbConnectionWithTimeout(connectionId)
-    if (ensureErr) {
-      return { success: false, columns: [], error: ensureErr }
+    const started = Date.now()
+    const cached = mysqlClient.getTableColumnsCache(connectionId, tableName)
+    if (cached) {
+      console.log(
+        `[db-workbench] describe-table cache hit connection=${connectionId} table=${tableName} cols=${cached.length}`,
+      )
+      return { success: true, columns: cached }
+    }
+    const needsReconnect =
+      !mysqlClient.hasConnection(connectionId) || !mysqlClient.isConnected(connectionId)
+    if (needsReconnect) {
+      const ensureErr = await ensureDbConnectionWithTimeout(connectionId)
+      if (ensureErr) {
+        return { success: false, columns: [], error: ensureErr }
+      }
     }
     try {
-      return { success: true, columns: await mysqlClient.describeTable(connectionId, tableName) }
+      const columns = await mysqlClient.describeTable(connectionId, tableName)
+      console.log(
+        `[db-workbench] describe-table ok connection=${connectionId} table=${tableName} cols=${columns.length} ms=${Date.now() - started}`,
+      )
+      return { success: true, columns }
     } catch (err: any) {
+      console.error(
+        `[db-workbench] describe-table failed connection=${connectionId} table=${tableName} ms=${Date.now() - started}:`,
+        err.message,
+      )
       return { success: false, columns: [], error: err.message }
     }
   })

@@ -117,7 +117,12 @@ function DbSessionWorkspacePanelInner({
               </button>
             </div>
           ) : ws.tablesLoading && ws.tables.length === 0 ? (
-            <div className="dbw-sidebar-loading">Loading tables...</div>
+            <div className="dbw-sidebar-loading">
+              <span>Loading tables…</span>
+              <span className="dbw-sidebar-loading-hint">
+                Over SSH this can take up to 50s. Use Refresh if it stays stuck.
+              </span>
+            </div>
           ) : ws.tables.length === 0 ? (
             <div className="dbw-sidebar-empty">
               {ws.tablesLoading ? 'Loading tables...' : 'No tables found'}

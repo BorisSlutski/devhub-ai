@@ -427,6 +427,49 @@ const api = {
   dbListDatabases: (connectionId: string): Promise<{
     success: boolean; databases: string[]; error?: string;
   }> => ipcRenderer.invoke('db-list-databases', connectionId),
+
+  // Trino Workbench
+  trinoServerPresets: (): Promise<{
+    success: boolean; presets: { label: string; server: string }[];
+  }> => ipcRenderer.invoke('trino-server-presets'),
+  trinoConnect: (
+    connectionId: string,
+    server: string,
+    catalog: string,
+    schema: string,
+    user: string,
+    password: string,
+  ): Promise<{ success: boolean; connectionId?: string; error?: string }> =>
+    ipcRenderer.invoke('trino-connect', connectionId, server, catalog, schema, user, password),
+  trinoDisconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('trino-disconnect', connectionId),
+  trinoListConnections: (): Promise<{
+    success: boolean
+    connections: { id: string; server: string; catalog: string; schema: string; user: string; connected: boolean }[]
+    error?: string
+  }> => ipcRenderer.invoke('trino-list-connections'),
+  trinoExecuteQuery: (connectionId: string, sql: string): Promise<{
+    columns: any[]; rows: any[][]; rowCount: number;
+    affectedRows: number; executionTimeMs: number; error?: string; truncated?: boolean;
+  }> => ipcRenderer.invoke('trino-execute-query', connectionId, sql),
+  trinoCancelQuery: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('trino-cancel-query', connectionId),
+  trinoListCatalogs: (connectionId: string): Promise<{
+    success: boolean; catalogs: string[]; error?: string;
+  }> => ipcRenderer.invoke('trino-list-catalogs', connectionId),
+  trinoListSchemas: (connectionId: string, catalog: string): Promise<{
+    success: boolean; schemas: string[]; error?: string;
+  }> => ipcRenderer.invoke('trino-list-schemas', connectionId, catalog),
+  trinoListTables: (connectionId: string, catalog?: string, schema?: string): Promise<{
+    success: boolean; tables: any[]; error?: string;
+  }> => ipcRenderer.invoke('trino-list-tables', connectionId, catalog, schema),
+  trinoDescribeTable: (
+    connectionId: string,
+    tableName: string,
+    catalog?: string,
+    schema?: string,
+  ): Promise<{ success: boolean; columns: any[]; error?: string }> =>
+    ipcRenderer.invoke('trino-describe-table', connectionId, tableName, catalog, schema),
 }
 
 contextBridge.exposeInMainWorld('api', api)

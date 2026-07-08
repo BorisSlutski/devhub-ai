@@ -30,7 +30,8 @@
     "@xterm/xterm": "^6.0.0",
     "detect-port": "^1.6.1",
     "mysql2": "^3.19.1",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "trino-client": "^0.2.9"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",

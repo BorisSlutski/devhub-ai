@@ -29,7 +29,7 @@ export interface AppState {
   chatInputEnabled?: boolean
   defaultModel?: string
   workspaceChosen?: boolean
-  activeTab?: 'launchpad' | 'folders' | 'claude' | 'sessions' | 'agents' | 'db-access'
+  activeTab?: 'launchpad' | 'folders' | 'claude' | 'sessions' | 'agents' | 'db-access' | 'trino-access'
   selectedProjectId?: string | null
   /** Absolute paths of starred folders on the All Folders tab */
   favoriteFolderPaths?: string[]

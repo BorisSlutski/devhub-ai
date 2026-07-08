@@ -39,6 +39,7 @@ import {
   registerPresetHandlers,
   registerAkeylessHandlers,
   registerDbWorkbenchHandlers,
+  registerTrinoWorkbenchHandlers,
   registerSummaryHandlers,
 } from './handlers'
 import { resourceMonitor } from './resource-monitor'
@@ -175,6 +176,7 @@ function setupIPC() {
   registerPresetHandlers()
   registerAkeylessHandlers()
   registerDbWorkbenchHandlers()
+  registerTrinoWorkbenchHandlers()
   registerSummaryHandlers()
 }
 

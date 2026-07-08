@@ -17,12 +17,13 @@ import { SetupWizard } from './components/SetupWizard'
 import { Toast } from './components/Toast'
 import { AgentsView } from './components/AgentsView'
 import { DbWorkbenchView } from './components/DbWorkbenchView'
+import { TrinoWorkbenchView } from './components/TrinoWorkbenchView'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Skeleton } from './components/Skeleton'
 import { Project } from '../shared/types'
 import appIcon from '../../resources/icon.png'
 
-type TabId = 'launchpad' | 'folders' | 'sessions' | 'agents' | 'db-access'
+type TabId = 'launchpad' | 'folders' | 'sessions' | 'agents' | 'db-access' | 'trino-access'
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>('launchpad')
@@ -164,6 +165,7 @@ export function App() {
     { id: 'tab-folders', label: 'Go to All Folders', group: 'Navigation', run: () => setActiveTab('folders') },
     { id: 'tab-sessions', label: 'Go to Sessions', group: 'Navigation', run: () => setActiveTab('sessions') },
     { id: 'tab-db', label: 'Go to DB Access', group: 'Navigation', run: () => setActiveTab('db-access') },
+    { id: 'tab-trino', label: 'Go to Trino', group: 'Navigation', run: () => setActiveTab('trino-access') },
     { id: 'new-session', label: 'New session', group: 'Sessions', keywords: 'terminal claude', run: () => { setActiveTab('sessions'); setShowNewSession(true) } },
     { id: 'settings', label: 'Open Settings', group: 'App', run: () => setShowSettings(true) },
     { id: 'help', label: 'Keyboard shortcuts', group: 'App', run: () => setShowHelp(true) },
@@ -511,6 +513,12 @@ export function App() {
         >
           DB Access
         </div>
+        <div
+          className={`tab ${activeTab === 'trino-access' ? 'active' : ''}`}
+          onClick={() => setActiveTab('trino-access')}
+        >
+          Trino
+        </div>
       </div>
 
       <div
@@ -526,7 +534,20 @@ export function App() {
         </ErrorBoundary>
       </div>
 
-      {activeTab === 'db-access' ? null : activeTab === 'agents' ? (
+      <div
+        style={{
+          display: activeTab === 'trino-access' ? 'flex' : 'none',
+          flex: 1,
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <ErrorBoundary name="Trino">
+          <TrinoWorkbenchView />
+        </ErrorBoundary>
+      </div>
+
+      {activeTab === 'db-access' || activeTab === 'trino-access' ? null : activeTab === 'agents' ? (
         <ErrorBoundary name="Agents">
           <AgentsView />
         </ErrorBoundary>

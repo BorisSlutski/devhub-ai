@@ -8,15 +8,28 @@ const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
 const mockMysql = {
   isConnected: vi.fn(),
   hasConnection: vi.fn(),
+  isQueryInFlight: vi.fn(),
+  getTableColumnsCache: vi.fn(),
   reconnect: vi.fn(),
   cancelQuery: vi.fn(),
   executeQuery: vi.fn(),
   describeTable: vi.fn(),
 }
 
+const mockTunnel = {
+  id: 'conn-1',
+  producerName: '/prod/dba/test',
+  localPort: 2000,
+  dbName: 'tax_rates',
+  credentials: { user: 'u', password: 'p' },
+}
+
 const mockAkeyless = {
-  getTunnel: vi.fn(),
+  getTunnel: vi.fn(() => mockTunnel),
+  getConnectionMeta: vi.fn(() => ({ producerName: mockTunnel.producerName, kgb: 'k', dbName: 'tax_rates', type: 'mysql' as const })),
+  reopenTunnel: vi.fn(),
   getCredentials: vi.fn(),
+  clearConnectionMeta: vi.fn(),
 }
 
 vi.mock('electron', () => ({
@@ -45,6 +58,8 @@ describe('db-workbench handlers', () => {
     vi.clearAllMocks()
     mockMysql.hasConnection.mockReturnValue(true)
     mockMysql.isConnected.mockReturnValue(true)
+    mockMysql.isQueryInFlight.mockReturnValue(false)
+    mockMysql.getTableColumnsCache.mockReturnValue(null)
     mockMysql.cancelQuery.mockResolvedValue({ success: true })
   })
 
@@ -69,6 +84,7 @@ describe('db-workbench handlers', () => {
         extra: '',
       },
     ]
+    mockMysql.getTableColumnsCache.mockReturnValue(null)
     mockMysql.describeTable.mockResolvedValue(columns)
     const describe = handlers.get('db-describe-table')
     expect(describe).toBeDefined()
@@ -77,7 +93,17 @@ describe('db-workbench handlers', () => {
     expect(mockMysql.describeTable).toHaveBeenCalledWith('conn-1', 'tax_rate')
   })
 
+  it('db-describe-table returns cached columns without describe', async () => {
+    const columns = [{ name: 'id', type: 'int', nullable: true, key: 'PRI', defaultValue: null, extra: '' }]
+    mockMysql.getTableColumnsCache.mockReturnValue(columns)
+    const describe = handlers.get('db-describe-table')
+    const result = await describe!({} as never, 'conn-1', 'tax_rate')
+    expect(result).toEqual({ success: true, columns })
+    expect(mockMysql.describeTable).not.toHaveBeenCalled()
+  })
+
   it('db-describe-table returns error when describe fails', async () => {
+    mockMysql.getTableColumnsCache.mockReturnValue(null)
     mockMysql.describeTable.mockRejectedValue(new Error('timeout'))
     const describe = handlers.get('db-describe-table')
     const result = await describe!({} as never, 'conn-1', 'tax_rate')

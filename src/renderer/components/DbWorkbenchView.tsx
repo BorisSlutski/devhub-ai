@@ -14,9 +14,11 @@ import {
   shouldShowProducerSubtitle,
 } from '../../shared/db-picker'
 import { normalizeSqlSingleQuotedTableIds } from '../../shared/sql-ident-normalize'
+import { parseStarSelectPreview } from '../../shared/sql-star-preview'
 import { shouldApplyDescribeResult } from '../db-columns-describe'
 import './DbWorkbenchView.css'
 import { DbSessionWorkspacePanel } from './DbSessionWorkspacePanel'
+import { StatusDot } from './StatusDot'
 
 /* ── Local Types (no shared imports to avoid circular deps) ── */
 
@@ -71,6 +73,54 @@ const COLUMNS_DESCRIBE_TIMEOUT_MS = 50_000
 const hmrTablesCache = new Map<string, TableInfo[]>()
 const tablesFetchInflight = new Map<string, Promise<void>>()
 
+function applyTablesForConnection(
+  setSessions: React.Dispatch<React.SetStateAction<DbSession[]>>,
+  connectionId: string,
+  tables: TableInfo[],
+  tablesError: string | null,
+) {
+  hmrTablesCache.set(connectionId, tables)
+  setSessions((prev) =>
+    prev.map((s) =>
+      s.connectionId === connectionId
+        ? {
+            ...s,
+            workspace: {
+              ...s.workspace,
+              tables,
+              tablesLoading: false,
+              tablesError,
+            },
+          }
+        : s,
+    ),
+  )
+}
+
+function failTablesForConnection(
+  setSessions: React.Dispatch<React.SetStateAction<DbSession[]>>,
+  connectionId: string,
+  errMsg: string,
+) {
+  setSessions((prev) =>
+    prev.map((s) =>
+      s.connectionId === connectionId
+        ? {
+            ...s,
+            workspace: {
+              ...s.workspace,
+              tables: [],
+              tablesLoading: false,
+              tablesError: errMsg,
+              messages: [...s.workspace.messages, errMsg],
+              activeResultTab: 'messages',
+            },
+          }
+        : s,
+    ),
+  )
+}
+
 interface DbSessionWorkspace {
   tables: TableInfo[]
   tablesLoading: boolean
@@ -95,6 +145,8 @@ interface DbSession {
   dbName: string
   producerName: string
   label: string
+  /** False when akeyless SSH tunnel process exited. */
+  tunnelAlive: boolean
   workspace: DbSessionWorkspace
 }
 
@@ -132,6 +184,7 @@ function createSession(conn: {
     producerName: conn.producerName ?? '',
     cluster,
     label: cluster ? `${conn.dbName} · ${cluster}` : conn.dbName,
+    tunnelAlive: true,
     workspace: createEmptyWorkspace(),
   }
 }
@@ -226,8 +279,13 @@ export function DbWorkbenchView() {
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   const runQueryRef = useRef<(sessionId: string, sqlOverride?: string) => void>(() => {})
+  const fetchTablesRef = useRef<(sessionId: string, forceRefresh?: boolean) => void>(() => {})
+  const fetchTableColumnsRef = useRef<
+    (sessionId: string, connectionId: string, tableName: string) => void
+  >(() => {})
   const queryRunIdRef = useRef(0)
   const columnsDescribeGenRef = useRef<Map<string, number>>(new Map())
+  const tablesFetchGenRef = useRef<Map<string, number>>(new Map())
   const sessionsRef = useRef<DbSession[]>([])
   sessionsRef.current = sessions
   const editorViewRef = useRef<EditorView | null>(null)
@@ -271,16 +329,73 @@ export function DbWorkbenchView() {
           const cachedTables = hmrTablesCache.get(s.connectionId)
           if (cachedTables?.length) {
             session.workspace = { ...session.workspace, tables: cachedTables }
+          } else {
+            session.workspace = { ...session.workspace, tablesLoading: true }
           }
           return session
         })
         return restored
       })
       setActiveSessionId((prev) => prev ?? res.sessions![res.sessions!.length - 1].connectionId)
+      queueMicrotask(() => {
+        for (const s of res.sessions!) {
+          if (!hmrTablesCache.get(s.connectionId)?.length) {
+            void fetchTablesRef.current(s.connectionId)
+          }
+        }
+      })
     })()
     return () => {
       cancelled = true
     }
+  }, [])
+
+  // If main already listed tables (or HMR preserved cache) but React state is stale, hydrate.
+  useEffect(() => {
+    const stuck = sessions.some(
+      (s) => s.workspace.tablesLoading && s.workspace.tables.length === 0,
+    )
+    if (!stuck) return
+    setSessions((prev) => {
+      let changed = false
+      const next = prev.map((s) => {
+        const cached = hmrTablesCache.get(s.connectionId)
+        if (cached?.length && s.workspace.tables.length === 0) {
+          changed = true
+          return {
+            ...s,
+            workspace: {
+              ...s.workspace,
+              tables: cached,
+              tablesLoading: false,
+              tablesError: null,
+            },
+          }
+        }
+        return s
+      })
+      return changed ? next : prev
+    })
+  }, [sessions])
+
+  // HMR / remount can leave "Running…" with no in-flight IPC — clear stale UI state.
+  useEffect(() => {
+    const stuck = sessions.some((s) => s.workspace.queryRunning)
+    if (!stuck) return
+    queryRunIdRef.current += 1
+    stopQueryElapsedTimer()
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.workspace.queryRunning
+          ? { ...s, workspace: { ...s.workspace, queryRunning: false } }
+          : s,
+      ),
+    )
+    void window.api.dbListSessions().then((res) => {
+      for (const s of res.sessions ?? []) {
+        void window.api.dbCancelQuery(s.connectionId).catch(() => undefined)
+      }
+    })
   }, [])
 
   const patchSession = useCallback((sessionId: string, patch: Partial<DbSessionWorkspace>) => {
@@ -366,14 +481,26 @@ export function DbWorkbenchView() {
             abortInFlightQueryForConnection(connectionId)
             hmrTablesCache.delete(connectionId)
             tablesFetchInflight.delete(connectionId)
-            setSessions((prev) => {
-              const next = prev.filter((s) => s.connectionId !== connectionId)
-              setActiveSessionId((activeId) =>
-                activeId === connectionId ? (next[next.length - 1]?.id ?? null) : activeId,
-              )
-              return next
-            })
-            setConnectError(`${reason}. Reconnect to continue.`)
+            setSessions((prev) =>
+              prev.map((s) =>
+                s.connectionId === connectionId
+                  ? {
+                      ...s,
+                      tunnelAlive: false,
+                      workspace: {
+                        ...s.workspace,
+                        tables: [],
+                        tablesLoading: false,
+                        tablesError: reason,
+                        queryRunning: false,
+                        messages: [...s.workspace.messages, reason],
+                        activeResultTab: 'messages',
+                      },
+                    }
+                  : s,
+              ),
+            )
+            setConnectError(`${reason}. Click Reconnect tunnel or disconnect and connect again.`)
           })
         : () => {}
     return () => {
@@ -546,9 +673,13 @@ export function DbWorkbenchView() {
         producerName,
         cluster,
       })
+      newSession.workspace = { ...newSession.workspace, tablesLoading: true }
       setSessions((prev) => [...prev, newSession])
       setActiveSessionId(newSession.id)
       setIsConnecting(false)
+      queueMicrotask(() => {
+        void fetchTablesRef.current(newSession.id)
+      })
     } catch (err) {
       clearPhaseTimers()
       setIsConnecting(false)
@@ -561,6 +692,37 @@ export function DbWorkbenchView() {
       )
     }
   }, [])
+
+  const handleReconnectTunnel = useCallback(
+    async (sessionId: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+      setConnectError(null)
+      patchSession(sessionId, { tablesLoading: true, tablesError: null })
+      try {
+        const res = await window.api.dbReconnect(session.connectionId)
+        if (!res.success) {
+          patchSession(sessionId, {
+            tablesLoading: false,
+            tablesError: res.error ?? 'Reconnect failed',
+          })
+          setConnectError(res.error ?? 'Reconnect failed')
+          return
+        }
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId ? { ...s, tunnelAlive: true } : s,
+          ),
+        )
+        await fetchTablesRef.current(sessionId, true)
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        patchSession(sessionId, { tablesLoading: false, tablesError: errMsg })
+        setConnectError(errMsg)
+      }
+    },
+    [patchSession],
+  )
 
   const handleDisconnect = useCallback(
     async (sessionId: string) => {
@@ -587,25 +749,30 @@ export function DbWorkbenchView() {
   const fetchTables = useCallback(
     async (sessionId: string, forceRefresh = false) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId)
-      if (!session) return
+      const connectionId = session?.connectionId ?? sessionId
 
-      const connectionId = session.connectionId
+      if (!session && !forceRefresh) {
+        const cached = hmrTablesCache.get(connectionId)
+        if (cached?.length) {
+          applyTablesForConnection(setSessions, connectionId, cached, null)
+        }
+        return
+      }
+
       if (!connectionId) {
-        patchSession(sessionId, {
-          tablesLoading: false,
-          tablesError: 'Connection lost. Click Retry to reconnect.',
-        })
+        if (session) {
+          patchSession(sessionId, {
+            tablesLoading: false,
+            tablesError: 'Connection lost. Click Retry to reconnect.',
+          })
+        }
         return
       }
 
       if (!forceRefresh) {
         const cached = hmrTablesCache.get(connectionId)
-        if (cached?.length && session.workspace.tables.length === 0) {
-          patchSession(sessionId, {
-            tables: cached,
-            tablesLoading: false,
-            tablesError: null,
-          })
+        if (cached?.length && (session?.workspace.tables.length ?? 0) === 0) {
+          applyTablesForConnection(setSessions, connectionId, cached, null)
           return
         }
       }
@@ -613,29 +780,37 @@ export function DbWorkbenchView() {
       const inflight = tablesFetchInflight.get(connectionId)
       if (inflight && !forceRefresh) {
         patchSession(sessionId, { tablesLoading: true, tablesError: null })
-        await inflight
+        try {
+          await inflight
+        } catch {
+          // Primary fetch already recorded the error.
+        }
         const cached = hmrTablesCache.get(connectionId)
         if (cached?.length) {
-          patchSession(sessionId, {
-            tables: cached,
-            tablesLoading: false,
-            tablesError: null,
-          })
+          applyTablesForConnection(setSessions, connectionId, cached, null)
+          return
+        }
+        const latest = sessionsRef.current.find((s) => s.connectionId === connectionId)
+        if (latest && latest.workspace.tables.length === 0) {
+          failTablesForConnection(
+            setSessions,
+            connectionId,
+            latest.workspace.tablesError ?? 'Failed to load tables',
+          )
         }
         return
       }
 
-      patchSession(sessionId, { tablesLoading: true, tablesError: null })
+      const fetchGen = (tablesFetchGenRef.current.get(connectionId) ?? 0) + 1
+      tablesFetchGenRef.current.set(connectionId, fetchGen)
 
-      const failTables = (errMsg: string) => {
-        updateSessionWorkspace(sessionId, (ws) => ({
-          tables: [],
-          tablesLoading: false,
-          tablesError: errMsg,
-          messages: [...ws.messages, errMsg],
-          activeResultTab: 'messages',
-        }))
-      }
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.connectionId === connectionId
+            ? { ...s, workspace: { ...s.workspace, tablesLoading: true, tablesError: null } }
+            : s,
+        ),
+      )
 
       const run = async () => {
         try {
@@ -648,18 +823,23 @@ export function DbWorkbenchView() {
               )
             }),
           ])
+          if (tablesFetchGenRef.current.get(connectionId) !== fetchGen) return
           if (!res.success) {
-            failTables(res.error ?? 'Failed to load tables')
+            failTablesForConnection(
+              setSessions,
+              connectionId,
+              res.error ?? 'Failed to load tables',
+            )
           } else {
-            hmrTablesCache.set(connectionId, res.tables ?? [])
-            patchSession(sessionId, {
-              tables: res.tables ?? [],
-              tablesLoading: false,
-              tablesError: null,
-            })
+            applyTablesForConnection(setSessions, connectionId, res.tables ?? [], null)
           }
         } catch (err) {
-          failTables(err instanceof Error ? err.message : String(err))
+          if (tablesFetchGenRef.current.get(connectionId) !== fetchGen) return
+          failTablesForConnection(
+            setSessions,
+            connectionId,
+            err instanceof Error ? err.message : String(err),
+          )
         }
       }
 
@@ -671,14 +851,16 @@ export function DbWorkbenchView() {
         tablesFetchInflight.delete(connectionId)
       }
     },
-    [patchSession, updateSessionWorkspace],
+    [patchSession],
   )
+
+  fetchTablesRef.current = fetchTables
 
   useEffect(() => {
     if (!activeSessionId) return
     const session = sessionsRef.current.find((s) => s.id === activeSessionId)
     if (!session) return
-    if (session.workspace.tables.length > 0 || session.workspace.tablesLoading) return
+    if (session.workspace.tables.length > 0) return
     void fetchTables(activeSessionId)
   }, [activeSessionId, fetchTables])
 
@@ -768,10 +950,28 @@ export function DbWorkbenchView() {
           messages: [...w.messages, `Error describing ${tableName}: ${errMsg}`],
           activeResultTab: 'messages',
         }))
+      } finally {
+        const session = sessionsRef.current.find((s) => s.id === sessionId)
+        if (
+          session &&
+          session.workspace.columnsLoading === tableName &&
+          session.workspace.tableColumns[tableName] === undefined &&
+          (columnsDescribeGenRef.current.get(sessionId) ?? 0) === gen
+        ) {
+          updateSessionWorkspace(sessionId, (w) => ({
+            columnsLoading: null,
+            columnsError: {
+              ...w.columnsError,
+              [tableName]: w.columnsError[tableName] ?? 'Failed to load columns',
+            },
+          }))
+        }
       }
     },
     [updateSessionWorkspace],
   )
+
+  fetchTableColumnsRef.current = fetchTableColumnsForSession
 
   const toggleTableForSession = useCallback(
     async (sessionId: string, tableName: string) => {
@@ -800,7 +1000,14 @@ export function DbWorkbenchView() {
         skipFetch = false
         return prev.map((s) =>
           s.id === sessionId
-            ? { ...s, workspace: { ...s.workspace, expandedTable: tableName } }
+            ? {
+                ...s,
+                workspace: {
+                  ...s.workspace,
+                  expandedTable: tableName,
+                  columnsLoading: tableName,
+                },
+              }
             : s,
         )
       })
@@ -832,7 +1039,10 @@ export function DbWorkbenchView() {
         return
       }
       const sql = `SELECT * FROM \`${tableName}\` LIMIT ${TABLE_PREVIEW_LIMIT};`
-      patchSession(sessionId, { query: sql })
+      patchSession(sessionId, { query: sql, expandedTable: tableName })
+      if (session) {
+        void fetchTableColumnsRef.current(sessionId, session.connectionId, tableName)
+      }
       void runQueryRef.current(sessionId, sql)
     },
     [patchSession, updateSessionWorkspace],
@@ -931,11 +1141,28 @@ export function DbWorkbenchView() {
           if (res.truncated) {
             notes.push('Showing first 10,000 rows (more may exist — add a narrower WHERE or LIMIT).')
           }
-          updateSessionWorkspace(sessionId, (w) => ({
-            queryRunning: false,
-            result: res,
-            messages: notes.length > 0 ? [...w.messages, ...notes] : w.messages,
-          }))
+          const preview = parseStarSelectPreview(sql)
+          updateSessionWorkspace(sessionId, (w) => {
+            const patch: Partial<DbSessionWorkspace> = {
+              queryRunning: false,
+              result: res,
+              messages: notes.length > 0 ? [...w.messages, ...notes] : w.messages,
+            }
+            if (preview && res.columns.length > 0) {
+              patch.tableColumns = {
+                ...w.tableColumns,
+                [preview.table]: res.columns.map((col) => ({
+                  name: col.name,
+                  type: col.type,
+                  nullable: true,
+                  key: '',
+                  defaultValue: null,
+                  extra: '',
+                })),
+              }
+            }
+            return patch
+          })
         }
       } catch (err) {
         if (runId !== queryRunIdRef.current) return
@@ -1364,15 +1591,48 @@ export function DbWorkbenchView() {
           <button className="btn btn-sm" type="button" onClick={openPicker}>
             + Add connection
           </button>
-          {activeSession && <span className="dbw-conn-label">{activeSession.label}</span>}
+          {activeSession && (
+            <span className="dbw-conn-label">
+              {activeSession.label}
+              {!activeSession.tunnelAlive && (
+                <span className="dbw-conn-dead"> · tunnel down</span>
+              )}
+            </span>
+          )}
           <span className="dbw-conn-status">
-            <span className="dbw-conn-dot" />
-            {sessions.length} connected
+            <StatusDot
+              status={
+                !activeSession
+                  ? 'idle'
+                  : !activeSession.tunnelAlive
+                    ? 'error'
+                    : activeSession.workspace.queryRunning
+                      ? 'running'
+                      : 'idle'
+              }
+              title={
+                activeSession && !activeSession.tunnelAlive
+                  ? 'Tunnel down'
+                  : activeSession?.workspace.queryRunning
+                    ? 'Query running'
+                    : 'Connected'
+              }
+            />
+            {sessions.filter((s) => s.tunnelAlive).length} connected
           </span>
         </div>
         <div className="dbw-toolbar-right">
-          {activeSessionId && (
+          {activeSessionId && activeSession && (
             <>
+              {!activeSession.tunnelAlive && (
+                <button
+                  className="btn btn-sm btn-primary"
+                  type="button"
+                  onClick={() => void handleReconnectTunnel(activeSessionId)}
+                >
+                  Reconnect tunnel
+                </button>
+              )}
               <button
                 className="btn btn-sm btn-danger"
                 type="button"
@@ -1383,6 +1643,7 @@ export function DbWorkbenchView() {
               <button
                 className="btn btn-sm"
                 type="button"
+                disabled={!activeSession.tunnelAlive}
                 onClick={() => void fetchTables(activeSessionId, true)}
               >
                 Refresh

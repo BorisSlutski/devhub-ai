@@ -70,6 +70,12 @@ const CLI_RETRY_DELAYS_MS = [0, 800, 1600, 3200, 6400]
 // ---------------------------------------------------------------------------
 
 const activeTunnels = new Map<string, TunnelInfo>()
+/** Survives tunnel process exit so we can reopen SSH without re-picking the DB. */
+const connectionRegistry = new Map<
+  string,
+  { producerName: string; kgb: string; dbName: string; type: 'mysql' | 'mongo' }
+>()
+const tunnelStderrTail = new Map<string, string[]>()
 const producerDetailsCache = new Map<string, { host: string; dbName: string }>()
 let producersListCache: { at: number; producers: DbProducer[] } | null = null
 let resolvedBinaryPath: string | null = null
@@ -87,6 +93,39 @@ function enqueueCli<T>(fn: () => Promise<T>): Promise<T> {
     () => undefined,
   )
   return run
+}
+
+function appendTunnelLog(tunnelId: string, chunk: string): void {
+  const lines = chunk
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (lines.length === 0) return
+  const buf = tunnelStderrTail.get(tunnelId) ?? []
+  buf.push(...lines)
+  if (buf.length > 12) buf.splice(0, buf.length - 12)
+  tunnelStderrTail.set(tunnelId, buf)
+}
+
+function tunnelExitDetail(tunnelId: string, code: number | null, signal: NodeJS.Signals | null): string {
+  const tail = (tunnelStderrTail.get(tunnelId) ?? []).slice(-3).join(' | ')
+  tunnelStderrTail.delete(tunnelId)
+  const base =
+    signal === 'SIGTERM'
+      ? 'SSH tunnel closed unexpectedly'
+      : `SSH tunnel closed (code=${code ?? 'null'}, signal=${signal ?? 'null'})`
+  return tail ? `${base}: ${tail}` : base
+}
+
+export function getConnectionMeta(
+  connectionId: string,
+): { producerName: string; kgb: string; dbName: string; type: 'mysql' | 'mongo' } | null {
+  return connectionRegistry.get(connectionId) ?? null
+}
+
+export function clearConnectionMeta(connectionId: string): void {
+  connectionRegistry.delete(connectionId)
+  tunnelStderrTail.delete(connectionId)
 }
 
 function notifyTunnelClosed(tunnelId: string, reason: string): void {
@@ -622,14 +661,18 @@ export async function getProducerDetails(
  * Orchestrates: fetch producer metadata, obtain temporary credentials,
  * pick a local port, and spawn the long-running tunnel process.
  */
-export async function openTunnel(producerName: string): Promise<TunnelInfo> {
+export async function openTunnel(producerName: string, preferredId?: string): Promise<TunnelInfo> {
+  if (preferredId && activeTunnels.has(preferredId)) {
+    closeTunnel(preferredId, false)
+  }
+
   const [details, credentials] = await Promise.all([
     getProducerDetails(producerName),
     getCredentials(producerName),
   ])
 
   const localPort = allocatePort()
-  const tunnelId = generateTunnelId()
+  const tunnelId = preferredId ?? generateTunnelId()
   const { kgb, producer } = parseProducerPath(producerName)
   const dbType = typeFromPath(producerName)
   const bin = findAkeylessBinary()
@@ -659,6 +702,13 @@ export async function openTunnel(producerName: string): Promise<TunnelInfo> {
     },
   )
 
+  child.stdout?.on('data', (buf: Buffer) => {
+    appendTunnelLog(tunnelId, buf.toString())
+  })
+  child.stderr?.on('data', (buf: Buffer) => {
+    appendTunnelLog(tunnelId, buf.toString())
+  })
+
   const tunnelInfo: TunnelInfo = {
     id: tunnelId,
     producerName,
@@ -673,11 +723,19 @@ export async function openTunnel(producerName: string): Promise<TunnelInfo> {
     connected: true,
   }
 
+  connectionRegistry.set(tunnelId, {
+    producerName,
+    kgb,
+    dbName: details.dbName,
+    type: dbType,
+  })
+
   activeTunnels.set(tunnelId, tunnelInfo)
 
   // Handle process lifecycle
   child.on('error', (err) => {
     console.error(`[akeyless-db] tunnel ${tunnelId} error:`, err.message)
+    appendTunnelLog(tunnelId, err.message)
     tunnelInfo.connected = false
     tunnelInfo.process = null
   })
@@ -686,6 +744,10 @@ export async function openTunnel(producerName: string): Promise<TunnelInfo> {
     console.log(
       `[akeyless-db] tunnel ${tunnelId} exited (code=${code}, signal=${signal})`,
     )
+    const tail = (tunnelStderrTail.get(tunnelId) ?? []).slice(-5)
+    if (tail.length > 0) {
+      console.error(`[akeyless-db] tunnel ${tunnelId} stderr tail:`, tail.join(' | '))
+    }
     const wasActive = activeTunnels.has(tunnelId)
     const unexpected = wasActive && !tunnelInfo.closing
     tunnelInfo.connected = false
@@ -693,21 +755,28 @@ export async function openTunnel(producerName: string): Promise<TunnelInfo> {
     activeTunnels.delete(tunnelId)
     void mysqlClient.disconnect(tunnelId).catch(() => {})
     if (unexpected) {
-      const reason =
-        signal === 'SIGTERM'
-          ? 'SSH tunnel closed unexpectedly'
-          : `SSH tunnel closed (code=${code ?? 'null'}, signal=${signal ?? 'null'})`
-      notifyTunnelClosed(tunnelId, reason)
+      notifyTunnelClosed(tunnelId, tunnelExitDetail(tunnelId, code, signal))
     }
   })
 
   return tunnelInfo
 }
 
+/** Reopen SSH tunnel for an existing tab (same connection id). */
+export async function reopenTunnel(connectionId: string): Promise<TunnelInfo> {
+  const meta = connectionRegistry.get(connectionId)
+  if (!meta) {
+    throw new Error('No saved connection for this tab. Disconnect and connect again.')
+  }
+  console.log(`[akeyless-db] reopening tunnel ${connectionId} for ${meta.producerName}`)
+  return openTunnel(meta.producerName, connectionId)
+}
+
 /**
  * Kills a tunnel process and removes it from the active tunnels map.
+ * @param clearMeta When true (default), forget saved producer so reconnect cannot reopen.
  */
-export function closeTunnel(tunnelId: string): void {
+export function closeTunnel(tunnelId: string, clearMeta = true): void {
   const tunnel = activeTunnels.get(tunnelId)
   if (!tunnel) return
 
@@ -723,6 +792,9 @@ export function closeTunnel(tunnelId: string): void {
 
   tunnel.connected = false
   activeTunnels.delete(tunnelId)
+  if (clearMeta) {
+    clearConnectionMeta(tunnelId)
+  }
 }
 
 /**
@@ -765,9 +837,12 @@ export const akeylessDb = {
   getCredentials,
   getProducerDetails,
   openTunnel,
+  reopenTunnel,
   closeTunnel,
   getActiveTunnels,
   getTunnel,
+  getConnectionMeta,
+  clearConnectionMeta,
   closeAllTunnels,
   setAkeylessDbMainWindow,
 }

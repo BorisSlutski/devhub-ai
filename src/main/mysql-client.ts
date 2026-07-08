@@ -84,6 +84,17 @@ const PING_TIMEOUT_MS = 2_000
 const PING_IDLE_THRESHOLD_MS = 45_000
 /** Reuse SHOW FULL TABLES results — avoids HMR / tab churn hammering the tunnel. */
 const TABLES_LIST_CACHE_TTL_MS = 5 * 60 * 1000
+/** Hard cap for SHOW FULL TABLES (renderer races at 50s). */
+const LIST_TABLES_TIMEOUT_MS = 50_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms)
+    }),
+  ])
+}
 
 // ---------------------------------------------------------------------------
 // MySQL field-type code to human-readable name mapping
@@ -161,15 +172,22 @@ async function queryWithTimeout(
   }
 }
 
+async function pingWithTimeout(connection: any, label: string): Promise<void> {
+  await Promise.race([
+    connection.ping(),
+    new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`${label} ping timed out after ${PING_TIMEOUT_MS / 1000}s`)),
+        PING_TIMEOUT_MS,
+      )
+    }),
+  ])
+}
+
 async function pingIfIdle(entry: ConnectionEntry): Promise<void> {
   const idleMs = Date.now() - entry.lastActivityAt
   if (idleMs < PING_IDLE_THRESHOLD_MS) return
-  await Promise.race([
-    entry.queryConn.ping(),
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Connection ping timed out after ${PING_TIMEOUT_MS / 1000}s`)), PING_TIMEOUT_MS)
-    }),
-  ])
+  await pingWithTimeout(entry.queryConn, 'Query connection')
 }
 
 function columnCacheKey(database: string, table: string): string {
@@ -199,7 +217,8 @@ async function createMysqlConnection(
     rowsAsArray: true,
     enableKeepAlive: true,
     keepAliveInitialDelay: 10_000,
-    compress: true,
+    // PyCharm/JDBC default — compression over SSH tunnels often stalls the query socket.
+    compress: false,
   })
   await connection.ping()
   return connection
@@ -308,6 +327,16 @@ class MysqlClient {
       entry.meta.database,
     )
     entry.lastActivityAt = Date.now()
+  }
+
+  /** Verify the user-query socket; reopen if the tunnel dropped it while metadata still works. */
+  private async ensureQueryReady(entry: ConnectionEntry): Promise<void> {
+    try {
+      await pingWithTimeout(entry.queryConn, 'Query connection')
+      entry.lastActivityAt = Date.now()
+    } catch {
+      await this.replaceQueryConnection(entry)
+    }
   }
 
   private async queryMeta(entry: ConnectionEntry, sql: string, params?: unknown[]): Promise<[unknown, unknown]> {
@@ -436,13 +465,10 @@ class MysqlClient {
     let pingMs = 0
     let schemaMs = 0
     let tunnelOptimized = false
+    let useMetaSocket = false
 
     try {
       const pingStart = performance.now()
-      await pingIfIdle(entry)
-      pingMs = Math.round((performance.now() - pingStart) * 100) / 100
-      entry.queryInFlight = true
-
       const { sql: cappedSql, rowCapApplied } = capUnboundedSelect(sql, MAX_ROWS)
       let execSql = cappedSql
 
@@ -454,7 +480,7 @@ class MysqlClient {
         schemaMs = Math.round((performance.now() - schemaStart) * 100) / 100
         if (columns.some((c) => isLargeColumnType(c.type))) {
           execSql = buildTunnelOptimizedStarSelect(
-            (ident) => entry.queryConn.escapeId(ident),
+            (ident) => entry.metaConn.escapeId(ident),
             preview.database,
             preview.table,
             columns,
@@ -462,18 +488,40 @@ class MysqlClient {
           )
           tunnelOptimized = true
         }
+        // Same socket as DESCRIBE / SHOW TABLES — proven over SSH tunnels (PyCharm uses one JDBC conn).
+        useMetaSocket = true
+      } else {
+        await pingIfIdle(entry)
       }
+      pingMs = Math.round((performance.now() - pingStart) * 100) / 100
+      entry.queryInFlight = true
+      console.log(
+        `[mysql-client] query start id=${id} meta=${useMetaSocket} sql=${previewSql(execSql)} optimized=${tunnelOptimized}`,
+      )
 
       const queryStart = performance.now()
-      const [result, fields] = await queryWithTimeout(
-        entry.queryConn,
-        execSql,
-        undefined,
-        EXEC_QUERY_TIMEOUT_MS,
-        () => {
-          void this.replaceQueryConnection(entry).catch(() => undefined)
-        },
-      )
+      let result: unknown
+      let fields: unknown
+
+      if (useMetaSocket) {
+        await this.ensureMetaReady(entry)
+        ;[result, fields] = await this.withMetaLock(entry, () =>
+          queryWithTimeout(entry.metaConn, execSql, undefined, QUERY_TIMEOUT_MS, () => {
+            void this.replaceMetaConnection(entry)
+          }),
+        )
+      } else {
+        await this.ensureQueryReady(entry)
+        ;[result, fields] = await queryWithTimeout(
+          entry.queryConn,
+          execSql,
+          undefined,
+          EXEC_QUERY_TIMEOUT_MS,
+          () => {
+            void this.replaceQueryConnection(entry).catch(() => undefined)
+          },
+        )
+      }
       const queryMs = Math.round((performance.now() - queryStart) * 100) / 100
 
       if (entry.generation !== generationAtStart) {
@@ -499,7 +547,7 @@ class MysqlClient {
         }
 
         console.log(
-          `[mysql-client] query ok id=${id} total=${executionTimeMs}ms ping=${pingMs}ms schema=${schemaMs}ms mysql=${queryMs}ms sanitize=${sanitizeMs}ms rows=${rows.length} optimized=${tunnelOptimized} sql=${previewSql(sql)}`,
+          `[mysql-client] query ok id=${id} total=${executionTimeMs}ms ping=${pingMs}ms schema=${schemaMs}ms mysql=${queryMs}ms sanitize=${sanitizeMs}ms rows=${rows.length} optimized=${tunnelOptimized} meta=${useMetaSocket} sql=${previewSql(sql)}`,
         )
 
         return {
@@ -545,7 +593,7 @@ class MysqlClient {
       }
 
       console.error(
-        `[mysql-client] query failed id=${id} total=${executionTimeMs}ms ping=${pingMs}ms schema=${schemaMs}ms optimized=${tunnelOptimized} sql=${previewSql(sql)} err=${msg}`,
+        `[mysql-client] query failed id=${id} total=${executionTimeMs}ms ping=${pingMs}ms schema=${schemaMs}ms optimized=${tunnelOptimized} meta=${useMetaSocket} sql=${previewSql(sql)} err=${msg}`,
       )
 
       if (entry.generation !== generationAtStart) {
@@ -620,8 +668,21 @@ class MysqlClient {
     return entry?.meta.connected === true
   }
 
+  isQueryInFlight(id: string): boolean {
+    const entry = this.connections.get(id)
+    return entry?.queryInFlight === true
+  }
+
   hasConnection(id: string): boolean {
     return this.connections.has(id)
+  }
+
+  /** Read column metadata cached by a prior DESCRIBE or SELECT * preview. */
+  getTableColumnsCache(id: string, tableName: string, database?: string): ColumnInfo[] | null {
+    const entry = this.connections.get(id)
+    if (!entry) return null
+    const db = database ?? entry.meta.database
+    return entry.columnCache.get(columnCacheKey(db, tableName)) ?? null
   }
 
   async listDatabases(id: string): Promise<string[]> {
@@ -675,23 +736,28 @@ class MysqlClient {
     }
 
     const fetchTables = async (): Promise<TableInfo[]> => {
-      await this.ensureMetaReady(entry)
-      const qualifiedDb = entry.metaConn.escapeId(db)
-      const [rows] = await this.queryMeta(entry, `SHOW FULL TABLES FROM ${qualifiedDb}`)
+      return withTimeout(
+        (async () => {
+          const qualifiedDb = entry.metaConn.escapeId(db)
+          const [rows] = await this.queryMeta(entry, `SHOW FULL TABLES FROM ${qualifiedDb}`)
 
-      const tables = (rows as any[]).map((r: any) => {
-        const [name, tableType] = parseShowFullTablesRow(r, db)
-        return {
-          name,
-          type: (tableType === 'VIEW' ? 'VIEW' : 'TABLE') as 'TABLE' | 'VIEW',
-          engine: null,
-          rows: null,
-          comment: '',
-        }
-      })
-      tables.sort((a, b) => a.name.localeCompare(b.name))
-      entry.tablesListCache = { database: db, tables, at: Date.now() }
-      return tables
+          const tables = (rows as any[]).map((r: any) => {
+            const [name, tableType] = parseShowFullTablesRow(r, db)
+            return {
+              name,
+              type: (tableType === 'VIEW' ? 'VIEW' : 'TABLE') as 'TABLE' | 'VIEW',
+              engine: null,
+              rows: null,
+              comment: '',
+            }
+          })
+          tables.sort((a, b) => a.name.localeCompare(b.name))
+          entry.tablesListCache = { database: db, tables, at: Date.now() }
+          return tables
+        })(),
+        LIST_TABLES_TIMEOUT_MS,
+        `SHOW TABLES timed out after ${LIST_TABLES_TIMEOUT_MS / 1000}s`,
+      )
     }
 
     entry.listTablesInFlight = fetchTables().finally(() => {
