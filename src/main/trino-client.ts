@@ -74,6 +74,12 @@ function previewSql(sql: string, max = 120): string {
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}…`
 }
 
+/** Wix's Trino/LDAP identity requires the full `user@wix.com` form — bare usernames are rejected. */
+function normalizeWixUser(user: string): string {
+  const trimmed = user.trim()
+  return trimmed && !trimmed.includes('@') ? `${trimmed}@wix.com` : trimmed
+}
+
 /** Quote a Trino identifier segment (catalog/schema/table) — doubles embedded quotes. */
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`
@@ -102,22 +108,26 @@ class TrinoClientManager {
       this.disconnect(id)
     }
 
+    const normalizedUser = normalizeWixUser(user)
     const client = Trino.create({
       server,
       catalog: catalog || undefined,
       schema: schema || undefined,
-      auth: new BasicAuth(user, password || undefined),
+      auth: new BasicAuth(normalizedUser, password || undefined),
     })
 
     // Verify the credentials/server actually work before handing back a "connected" state.
-    const iter = await client.query('SELECT 1')
+    // Pass `user` explicitly on the query object rather than a bare string — the
+    // underlying trino-client library only sets the X-Trino-User header from a
+    // query-level `user` field, not from the BasicAuth username, on this call path.
+    const iter = await client.query({ query: 'SELECT 1', user: normalizedUser })
     for await (const page of iter) {
       if (page.error) {
         throw new Error(page.error.message)
       }
     }
 
-    const meta: TrinoConnection = { id, server, catalog, schema, user, connected: true }
+    const meta: TrinoConnection = { id, server, catalog, schema, user: normalizedUser, connected: true }
     this.connections.set(id, {
       client,
       meta,
@@ -161,7 +171,7 @@ class TrinoClientManager {
     try {
       console.log(`[trino-client] query start id=${id} sql=${previewSql(sql)}`)
       const iter = await withTimeout(
-        entry.client.query(sql),
+        entry.client.query({ query: sql, user: entry.meta.user }),
         Math.max(1, deadline - Date.now()),
         `Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`,
       )

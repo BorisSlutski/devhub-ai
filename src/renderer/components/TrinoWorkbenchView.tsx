@@ -105,6 +105,24 @@ interface ConnectFormState {
 }
 
 const EMPTY_FORM: ConnectFormState = { server: '', catalog: '', schema: '', user: '', password: '' }
+const LAST_CONNECTION_STORAGE_KEY = 'devhub-ai-trino-last-connection'
+
+function loadLastConnection(): Pick<ConnectFormState, 'server' | 'catalog' | 'schema' | 'user'> | null {
+  try {
+    const raw = localStorage.getItem(LAST_CONNECTION_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function saveLastConnection(form: Pick<ConnectFormState, 'server' | 'catalog' | 'schema' | 'user'>): void {
+  try {
+    localStorage.setItem(LAST_CONNECTION_STORAGE_KEY, JSON.stringify(form))
+  } catch {
+    // best effort — non-critical convenience feature
+  }
+}
 
 /* ── Component ── */
 
@@ -182,7 +200,9 @@ export function TrinoWorkbenchView() {
 
   const openConnectForm = useCallback(() => {
     setConnectError(null)
-    setForm(presets.length > 0 ? { ...EMPTY_FORM, server: presets[0].server } : EMPTY_FORM)
+    const last = loadLastConnection()
+    const base = presets.length > 0 ? { ...EMPTY_FORM, server: presets[0].server } : EMPTY_FORM
+    setForm(last ? { ...base, ...last, password: '' } : base)
     setShowConnectForm(true)
   }, [presets])
 
@@ -208,6 +228,12 @@ export function TrinoWorkbenchView() {
         setIsConnecting(false)
         return
       }
+      saveLastConnection({
+        server: form.server.trim(),
+        catalog: form.catalog.trim(),
+        schema: form.schema.trim(),
+        user: form.user.trim(),
+      })
       const newSession: TrinoSession = {
         id: connectionId,
         connectionId,
