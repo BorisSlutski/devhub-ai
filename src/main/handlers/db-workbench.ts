@@ -12,7 +12,10 @@ function touchConnection(connectionId: string): void {
   touchDbConnection(connectionId)
 }
 
-const ENSURE_CONNECTION_TIMEOUT_MS = 15_000
+// Generous enough to cover the force-tunnel-restart fallback below (SSH reopen +
+// Akeyless auth can take 20-30s on its own) — the fast path (tunnel already healthy)
+// returns almost immediately regardless.
+const ENSURE_CONNECTION_TIMEOUT_MS = 60_000
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return Promise.race([
@@ -50,29 +53,42 @@ async function ensureDbConnection(connectionId: string): Promise<string | null> 
     return 'A query is still running — wait or cancel before reconnecting.'
   }
 
-  const reconnect = async (user: string, password: string) => {
-    await mysqlClient.reconnect(
-      connectionId,
-      '127.0.0.1',
-      tunnel!.localPort,
-      user,
-      password,
-      tunnel!.dbName,
-    )
+  const reconnect = async (user: string, password: string, localPort: number, dbName: string) => {
+    await mysqlClient.reconnect(connectionId, '127.0.0.1', localPort, user, password, dbName)
     registerDbConnection(connectionId)
   }
 
   try {
-    await reconnect(tunnel.credentials.user, tunnel.credentials.password)
+    await reconnect(tunnel.credentials.user, tunnel.credentials.password, tunnel.localPort, tunnel.dbName)
     return null
   } catch {
     try {
       const credentials = await akeylessDb.getCredentials(tunnel.producerName)
       tunnel.credentials = credentials
-      await reconnect(credentials.user, credentials.password)
+      await reconnect(credentials.user, credentials.password, tunnel.localPort, tunnel.dbName)
       return null
-    } catch (err: any) {
-      return err?.message ?? String(err)
+    } catch {
+      // Both attempts failed on the existing local port. The SSH tunnel *process*
+      // can still be alive (so we never took the "tunnel missing" branch above)
+      // while the forward itself is silently stuck — e.g. after sleep/wake or a
+      // bastion-side drop the local client doesn't notice. Reconnecting MySQL to
+      // the same dead port just repeats the same hang on every query. Force a
+      // full tunnel restart on a fresh port as a last resort before giving up.
+      try {
+        console.log(
+          `[db-workbench] mysql reconnect failed twice for ${connectionId}, forcing SSH tunnel restart…`,
+        )
+        const reopened = await akeylessDb.reopenTunnel(connectionId)
+        await waitForLocalPort(reopened.localPort)
+        tunnel = akeylessDb.getTunnel(connectionId)
+        if (!tunnel) {
+          return 'SSH tunnel failed to reopen. Try Reconnect or connect again.'
+        }
+        await reconnect(tunnel.credentials.user, tunnel.credentials.password, tunnel.localPort, tunnel.dbName)
+        return null
+      } catch (err: any) {
+        return err?.message ?? String(err)
+      }
     }
   }
 }
