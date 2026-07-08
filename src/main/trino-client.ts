@@ -60,9 +60,11 @@ const QUERY_TIMEOUT_MS = 90_000
 interface ConnectionEntry {
   client: Trino
   meta: TrinoConnection
-  password: string
   /** queryId of the currently in-flight query, for cancelQuery. */
   currentQueryId: string | null
+  /** Set when cancelQuery runs before the first page arrives — executeQuery
+   *  issues the server-side cancel itself once currentQueryId becomes known. */
+  cancelRequested: boolean
   /** Bumped on cancel so an in-flight executeQuery does not apply stale results. */
   generation: number
 }
@@ -70,6 +72,11 @@ interface ConnectionEntry {
 function previewSql(sql: string, max = 120): string {
   const oneLine = sql.replace(/\s+/g, ' ').trim()
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}…`
+}
+
+/** Quote a Trino identifier segment (catalog/schema/table) — doubles embedded quotes. */
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`
 }
 
 // ---------------------------------------------------------------------------
@@ -114,8 +121,8 @@ class TrinoClientManager {
     this.connections.set(id, {
       client,
       meta,
-      password,
       currentQueryId: null,
+      cancelRequested: false,
       generation: 0,
     })
 
@@ -123,9 +130,6 @@ class TrinoClientManager {
   }
 
   disconnect(id: string): void {
-    const entry = this.connections.get(id)
-    if (!entry) return
-    entry.meta.connected = false
     this.connections.delete(id)
   }
 
@@ -149,14 +153,16 @@ class TrinoClientManager {
     }
 
     const start = performance.now()
+    const deadline = Date.now() + QUERY_TIMEOUT_MS
     const generationAtStart = entry.generation
     entry.currentQueryId = null
+    entry.cancelRequested = false
 
     try {
       console.log(`[trino-client] query start id=${id} sql=${previewSql(sql)}`)
       const iter = await withTimeout(
         entry.client.query(sql),
-        QUERY_TIMEOUT_MS,
+        Math.max(1, deadline - Date.now()),
         `Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`,
       )
 
@@ -164,11 +170,35 @@ class TrinoClientManager {
       const rows: any[][] = []
       let truncated = false
 
-      for await (const page of iter) {
+      // Manual iteration (not `for await`) so each page fetch is bounded by the
+      // overall deadline — `for await` would only bound the initial call above,
+      // letting a slow/stuck query page through results indefinitely.
+      while (true) {
         if (entry.generation !== generationAtStart) {
           return { ...empty, error: 'Query cancelled' }
         }
-        if (page.id) entry.currentQueryId = page.id
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) {
+          throw new Error(`Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`)
+        }
+        const { value: page, done } = await withTimeout(
+          iter.next(),
+          remaining,
+          `Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`,
+        )
+        if (done) break
+        if (page.id) {
+          entry.currentQueryId = page.id
+          if (entry.cancelRequested) {
+            entry.cancelRequested = false
+            try {
+              await entry.client.cancel(page.id)
+            } catch {
+              // best effort — generation bump already voids this result either way
+            }
+            return { ...empty, error: 'Query cancelled' }
+          }
+        }
         if (page.error) {
           throw new Error(page.error.message)
         }
@@ -214,8 +244,10 @@ class TrinoClientManager {
   }
 
   /**
-   * Cancel the currently in-flight query (best effort — Trino's cancel API
-   * requires the queryId, which we only learn once the first page returns).
+   * Cancel the currently in-flight query. Trino's cancel API requires the
+   * queryId, which we only learn once the first page returns — if that
+   * hasn't happened yet, `cancelRequested` tells executeQuery's loop to
+   * issue the server-side cancel itself as soon as the queryId arrives.
    */
   async cancelQuery(id: string): Promise<{ success: boolean; error?: string }> {
     const entry = this.connections.get(id)
@@ -224,6 +256,7 @@ class TrinoClientManager {
     }
     entry.generation += 1
     if (!entry.currentQueryId) {
+      entry.cancelRequested = true
       return { success: true }
     }
     try {
@@ -249,7 +282,7 @@ class TrinoClientManager {
   }
 
   async listSchemas(id: string, catalog: string): Promise<string[]> {
-    const res = await this.executeQuery(id, `SHOW SCHEMAS FROM ${catalog}`)
+    const res = await this.executeQuery(id, `SHOW SCHEMAS FROM ${quoteIdent(catalog)}`)
     if (res.error) throw new Error(res.error)
     return res.rows.map((r) => String(r[0]))
   }
@@ -261,7 +294,7 @@ class TrinoClientManager {
     const cat = catalog ?? entry.meta.catalog
     const sch = schema ?? entry.meta.schema
     if (!cat || !sch) throw new Error('No catalog/schema selected on this connection')
-    const res = await this.executeQuery(id, `SHOW TABLES FROM ${cat}.${sch}`)
+    const res = await this.executeQuery(id, `SHOW TABLES FROM ${quoteIdent(cat)}.${quoteIdent(sch)}`)
     if (res.error) throw new Error(res.error)
     return res.rows.map((r) => String(r[0]))
   }
@@ -272,7 +305,10 @@ class TrinoClientManager {
     if (!entry) throw new Error(`No connection found for id "${id}"`)
     const cat = catalog ?? entry.meta.catalog
     const sch = schema ?? entry.meta.schema
-    const qualified = cat && sch ? `${cat}.${sch}.${tableName}` : tableName
+    const qualified =
+      cat && sch
+        ? `${quoteIdent(cat)}.${quoteIdent(sch)}.${quoteIdent(tableName)}`
+        : quoteIdent(tableName)
     const res = await this.executeQuery(id, `DESCRIBE ${qualified}`)
     if (res.error) throw new Error(res.error)
     // DESCRIBE columns: Column, Type, Extra, Comment
