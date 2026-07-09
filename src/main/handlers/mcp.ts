@@ -1,9 +1,23 @@
 import { ipcMain } from 'electron'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { readdirSync, statSync, mkdirSync, existsSync, writeFileSync, readFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { execFile } from 'child_process'
 import { getShellPath } from '../process-manager'
+
+/** Only allow writes to the user-scope Claude config or a project's `.mcp.json` — never an arbitrary path. */
+function isAllowedMcpConfigPath(filePath: string): boolean {
+  if (filePath === join(homedir(), '.claude.json')) return true
+  return basename(filePath) === '.mcp.json'
+}
+
+/** Only allow deleting `.md` command files under a `.claude/commands` directory. */
+function isAllowedCommandPath(filePath: string): boolean {
+  if (basename(filePath).toLowerCase().split('.').pop() !== 'md') return false
+  const parts = filePath.split(/[/\\]/)
+  const commandsIdx = parts.lastIndexOf('commands')
+  return commandsIdx > 0 && parts[commandsIdx - 1] === '.claude'
+}
 
 export function registerMcpHandlers() {
   console.log('[MCP] registerMcpHandlers called')
@@ -125,6 +139,9 @@ export function registerMcpHandlers() {
   })
 
   ipcMain.handle('mcp-save-config', (_event, filePath: string, servers: Record<string, any>) => {
+    if (!isAllowedMcpConfigPath(filePath)) {
+      return { success: false, error: 'Refusing to write to this path' }
+    }
     try {
       let data: any = {}
       if (existsSync(filePath)) {
@@ -140,6 +157,9 @@ export function registerMcpHandlers() {
   })
 
   ipcMain.handle('mcp-read-raw-file', (_event, filePath: string) => {
+    if (!isAllowedMcpConfigPath(filePath)) {
+      return { success: false, error: 'Refusing to read this path' }
+    }
     try {
       if (!existsSync(filePath)) {
         const empty = { mcpServers: {} }
@@ -153,6 +173,9 @@ export function registerMcpHandlers() {
   })
 
   ipcMain.handle('mcp-save-raw-file', (_event, filePath: string, content: string) => {
+    if (!isAllowedMcpConfigPath(filePath)) {
+      return { success: false, error: 'Refusing to write to this path' }
+    }
     try {
       const parsed = JSON.parse(content)
       if (!parsed || typeof parsed !== 'object') {
@@ -172,6 +195,9 @@ export function registerMcpHandlers() {
   ipcMain.handle(
     'mcp-merge-servers',
     (_event, filePath: string, newServers: Record<string, any>, mode: 'merge' | 'replace') => {
+      if (!isAllowedMcpConfigPath(filePath)) {
+        return { success: false, error: 'Refusing to write to this path' }
+      }
       try {
         let data: any = {}
         if (existsSync(filePath)) {
@@ -255,6 +281,9 @@ export function registerMcpHandlers() {
   })
 
   ipcMain.handle('delete-command', (_event, filePath: string) => {
+    if (!isAllowedCommandPath(filePath)) {
+      return { success: false, error: 'Refusing to delete this path' }
+    }
     try {
       unlinkSync(filePath)
       return { success: true }

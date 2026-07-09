@@ -313,29 +313,44 @@ class MysqlClient {
     )
   }
 
-  private async replaceQueryConnection(entry: ConnectionEntry): Promise<void> {
+  /**
+   * `id` is optional only for legacy call sites; when provided, a connection that finishes
+   * AFTER the entry has been superseded (disconnected/reconnected under the same id, e.g. by a
+   * slow reconnect racing a cancel timeout) is destroyed immediately instead of being assigned
+   * to a stale, no-longer-tracked entry — otherwise that socket leaks forever.
+   */
+  private async replaceQueryConnection(entry: ConnectionEntry, id?: string): Promise<void> {
     try {
       entry.queryConn.destroy()
     } catch {
       // ignore
     }
-    entry.queryConn = await createMysqlConnection(
+    const conn = await createMysqlConnection(
       entry.host,
       entry.port,
       entry.meta.user,
       entry.password,
       entry.meta.database,
     )
+    if (id !== undefined && this.connections.get(id) !== entry) {
+      try {
+        conn.destroy()
+      } catch {
+        // ignore
+      }
+      return
+    }
+    entry.queryConn = conn
     entry.lastActivityAt = Date.now()
   }
 
   /** Verify the user-query socket; reopen if the tunnel dropped it while metadata still works. */
-  private async ensureQueryReady(entry: ConnectionEntry): Promise<void> {
+  private async ensureQueryReady(entry: ConnectionEntry, id?: string): Promise<void> {
     try {
       await pingWithTimeout(entry.queryConn, 'Query connection')
       entry.lastActivityAt = Date.now()
     } catch {
-      await this.replaceQueryConnection(entry)
+      await this.replaceQueryConnection(entry, id)
     }
   }
 
@@ -511,14 +526,14 @@ class MysqlClient {
           }),
         )
       } else {
-        await this.ensureQueryReady(entry)
+        await this.ensureQueryReady(entry, id)
         ;[result, fields] = await queryWithTimeout(
           entry.queryConn,
           execSql,
           undefined,
           EXEC_QUERY_TIMEOUT_MS,
           () => {
-            void this.replaceQueryConnection(entry).catch(() => undefined)
+            void this.replaceQueryConnection(entry, id).catch(() => undefined)
           },
         )
       }
@@ -627,7 +642,7 @@ class MysqlClient {
       }
 
       await Promise.race([
-        this.replaceQueryConnection(entry),
+        this.replaceQueryConnection(entry, id),
         new Promise<never>((_, reject) => {
           setTimeout(
             () => reject(new Error(`Reconnect after cancel timed out after ${CONNECT_TIMEOUT_MS / 1000}s`)),

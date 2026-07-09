@@ -70,6 +70,9 @@ const CLI_RETRY_DELAYS_MS = [0, 800, 1600, 3200, 6400]
 // ---------------------------------------------------------------------------
 
 const activeTunnels = new Map<string, TunnelInfo>()
+/** Tunnels we've SIGTERM'd but whose OS process hasn't confirmed exit yet — keeps their port reserved
+ *  and lets the eventual `exit` handler recognize it belongs to a superseded instance. */
+const closingTunnels = new Set<TunnelInfo>()
 /** Survives tunnel process exit so we can reopen SSH without re-picking the DB. */
 const connectionRegistry = new Map<
   string,
@@ -466,6 +469,9 @@ function allocatePort(min: number = PORT_RANGE_MIN, max: number = PORT_RANGE_MAX
   for (const tunnel of activeTunnels.values()) {
     used.add(tunnel.localPort)
   }
+  for (const tunnel of closingTunnels) {
+    used.add(tunnel.localPort)
+  }
   for (let port = min; port <= max; port++) {
     if (!used.has(port)) return port
   }
@@ -748,10 +754,19 @@ export async function openTunnel(producerName: string, preferredId?: string): Pr
     if (tail.length > 0) {
       console.error(`[akeyless-db] tunnel ${tunnelId} stderr tail:`, tail.join(' | '))
     }
-    const wasActive = activeTunnels.has(tunnelId)
-    const unexpected = wasActive && !tunnelInfo.closing
+    closingTunnels.delete(tunnelInfo)
     tunnelInfo.connected = false
     tunnelInfo.process = null
+
+    // A force-restart may have already registered a NEW tunnel/connection under this same id
+    // (see openTunnel's preferredId handling). If so, this stale exit must not touch it —
+    // leave the new tunnel/connection alone entirely.
+    const currentEntry = activeTunnels.get(tunnelId)
+    const supersededByNewTunnel = currentEntry !== undefined && currentEntry !== tunnelInfo
+    if (supersededByNewTunnel) return
+
+    const wasActive = currentEntry === tunnelInfo
+    const unexpected = wasActive && !tunnelInfo.closing
     activeTunnels.delete(tunnelId)
     void mysqlClient.disconnect(tunnelId).catch(() => {})
     if (unexpected) {
@@ -788,6 +803,8 @@ export function closeTunnel(tunnelId: string, clearMeta = true): void {
       // Process may already be dead — ignore
     }
     tunnel.process = null
+    // Its port/id stay reserved until the process actually exits (see the `exit` handler in openTunnel).
+    closingTunnels.add(tunnel)
   }
 
   tunnel.connected = false

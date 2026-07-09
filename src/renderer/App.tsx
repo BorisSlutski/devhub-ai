@@ -56,15 +56,13 @@ export function App() {
     setWaitingClaudeIds(prev => (prev.length === ids.length && prev.every((v, i) => v === ids[i]) ? prev : ids))
   }, [])
 
-  // Hydrate activeTab + selectedProjectId once from persisted state
+  // Always launch on the first tab (Launchpad) — only restore the selected project, not
+  // whichever tab happened to be open when the app last closed.
   useEffect(() => {
     if (!loaded || hydratedRef.current) return
     hydratedRef.current = true
-    const tab = state.activeTab as string | undefined
-    if (tab === 'claude') setActiveTab('sessions')
-    else if (tab && tab !== 'airflow') setActiveTab(state.activeTab as TabId)
     if (state.selectedProjectId) setSelectedProjectId(state.selectedProjectId)
-  }, [loaded, state.activeTab, state.selectedProjectId])
+  }, [loaded, state.selectedProjectId])
 
   // Persist navigation state when it changes (after initial hydration)
   useEffect(() => {

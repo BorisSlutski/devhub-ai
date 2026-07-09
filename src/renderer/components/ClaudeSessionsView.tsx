@@ -189,6 +189,10 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
     })
   }, [sessions, sessionOrder])
 
+  // Keyed on the actual id set, not sessions.length — a same-tick close+open leaves the count
+  // unchanged but must still reconcile sessionOrder (drop the closed id, append the new one).
+  const sessionIdsKey = sessions.map(s => s.id).join(',')
+
   useEffect(() => {
     if (sessionOrder.length === 0 && sessions.length > 0) {
       setSessionOrder(sessions.map(s => s.id))
@@ -200,7 +204,8 @@ export function ClaudeSessionsView({ sessions, lastCreatedSessionId, rtkEnabled,
         return [...kept, ...added]
       })
     }
-  }, [sessions.length])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionIdsKey])
 
   const sessionDisplayName = useCallback((session: Session) => {
     return session.nickname || sessionTitles.get(session.id) || session.folderName

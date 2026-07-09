@@ -2,7 +2,7 @@ import { ipcMain, shell, BrowserWindow, type WebContents } from 'electron'
 import { join } from 'path'
 import { readdir, stat } from 'fs/promises'
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs'
-import { execSync, exec } from 'child_process'
+import { execSync, exec, execFile } from 'child_process'
 import { promisify } from 'util'
 import { homedir } from 'os'
 import { WorkspaceFolder } from '../../shared/types'
@@ -11,11 +11,13 @@ import {
   buildGitSyncStatus,
   getWorkingTreeChanges,
   pullFolderToBase,
+  isSafeRefName,
   type PullFolderOptions,
 } from '../git-sync'
 import { getCachedFolderMeta, setCachedFolderMeta, invalidateFolderMeta } from '../git-meta-cache'
 
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 export function registerGitHandlers() {
   ipcMain.handle('list-workspace-folders', async (_event, scanPath: string) => {
@@ -293,8 +295,12 @@ export function registerGitHandlers() {
       return { success: false, error: 'Not a git repository' }
     }
 
+    if (!isSafeRefName(branchName)) {
+      return { success: false, error: 'Invalid branch name' }
+    }
+
     try {
-      await execAsync(`git checkout "${branchName}"`, {
+      await execFileAsync('git', ['checkout', branchName], {
         cwd: folderPath, encoding: 'utf-8', timeout: 10000,
       })
       return { success: true }

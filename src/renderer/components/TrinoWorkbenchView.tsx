@@ -782,6 +782,7 @@ export function TrinoWorkbenchView() {
               sessionId={s.id}
               dbName={s.catalog ? `${s.catalog}.${s.schema}` : s.server}
               workspace={s.workspace}
+              tunnelAlive={s.connected}
               isActive={s.id === activeSessionId}
               queryElapsedSec={s.id === activeSessionId ? queryElapsedSec : 0}
               tablePreviewLimit={TABLE_PREVIEW_LIMIT}

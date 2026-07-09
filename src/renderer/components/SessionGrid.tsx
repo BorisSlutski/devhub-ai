@@ -163,20 +163,13 @@ export function SessionGrid({
                 </button>
               </div>
               <div className="session-grid-cell-terminal">
-                {isFocused ? (
-                  <XTerminal
-                    sessionId={sessionId}
-                    active
-                    onWaitingChange={w => onWaitingChange(sessionId, w)}
-                  />
-                ) : (
-                  <div
-                    className="session-grid-cell-placeholder"
-                    title={session.label}
-                  >
-                    {session.label}
-                  </div>
-                )}
+                {/* Every cell stays mounted so background panes keep receiving live PTY output —
+                    there's no server-side replay buffer, so unmounting would drop it silently. */}
+                <XTerminal
+                  sessionId={sessionId}
+                  active={isFocused}
+                  onWaitingChange={w => onWaitingChange(sessionId, w)}
+                />
               </div>
             </div>
           )

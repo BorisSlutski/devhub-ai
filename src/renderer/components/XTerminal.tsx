@@ -101,6 +101,8 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
   const waitingRef = useRef(false)
   const onWaitingChangeRef = useRef(onWaitingChange)
   onWaitingChangeRef.current = onWaitingChange
+  const activeRef = useRef(active)
+  activeRef.current = active
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -400,7 +402,7 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
     ro.observe(containerRef.current)
 
     const onFind = (e: KeyboardEvent) => {
-      if (!active) return
+      if (!activeRef.current) return
       const inThis = containerRef.current?.contains(document.activeElement)
         || document.activeElement?.classList.contains('xterm-helper-textarea')
       if (!inThis && document.activeElement?.closest('.xterminal-container') !== containerRef.current) return
@@ -446,7 +448,10 @@ export function XTerminal({ sessionId, active, onWaitingChange }: Props) {
       termRef.current = null
       fitAddonRef.current = null
     }
-  }, [sessionId, active])
+    // `active` is read via activeRef (see onFind) — including it here would tear down and
+    // recreate the whole terminal (and its scrollback) on every focus toggle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
 
   // Re-fit when tab becomes active
   useEffect(() => {

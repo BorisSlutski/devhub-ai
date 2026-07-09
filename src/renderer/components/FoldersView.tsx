@@ -526,21 +526,35 @@ export function FoldersView({
     [pullConfirm, runPull],
   )
 
+  // Read via a ref rather than closing over `metaMap` directly: handlePullAll calls this twice
+  // across an `await`, and a stale closure would keep seeing the pre-fetch (possibly empty) map.
+  const metaMapRef = useRef(metaMap)
+  metaMapRef.current = metaMap
+
   const resolveGitPaths = useCallback(() => {
     return filtered
       .filter((f) => {
-        const meta = metaMap.get(f.path)
+        const meta = metaMapRef.current.get(f.path)
         if (meta?.gitBranch) return true
         return isPullable(meta)
       })
       .map((f) => f.path)
-  }, [filtered, metaMap])
+  }, [filtered])
 
   const handlePullAll = useCallback(async () => {
     let gitPaths = resolveGitPaths()
     if (gitPaths.length === 0) {
       setBulkSummary('Loading git info…')
-      await Promise.all(filtered.map((f) => loadFolderMeta(f.path, true, true)))
+      // Throttled to META_CONCURRENCY, matching the row-by-row IntersectionObserver loader —
+      // an unbounded Promise.all here would fire one `git fetch` per folder at once.
+      const queue = [...filtered]
+      const worker = async () => {
+        let next: WorkspaceFolder | undefined
+        while ((next = queue.shift())) {
+          await loadFolderMeta(next.path, true, true)
+        }
+      }
+      await Promise.all(Array.from({ length: META_CONCURRENCY }, worker))
       gitPaths = resolveGitPaths()
     }
     if (gitPaths.length === 0) {

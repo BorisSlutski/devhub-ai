@@ -49,6 +49,9 @@ export interface DbSessionWorkspacePanelProps {
   sessionId: string
   dbName: string
   workspace: DbSessionWorkspace
+  /** Whether the underlying connection (SSH tunnel for MySQL, live session for Trino) is up.
+   *  Defaults to true for callers that don't track a separate connection-alive state. */
+  tunnelAlive?: boolean
   isActive: boolean
   queryElapsedSec: number
   tablePreviewLimit: number
@@ -70,6 +73,7 @@ export interface DbSessionWorkspacePanelProps {
 function DbSessionWorkspacePanelInner({
   dbName,
   workspace: ws,
+  tunnelAlive = true,
   isActive,
   queryElapsedSec,
   tablePreviewLimit,
@@ -217,9 +221,10 @@ function DbSessionWorkspacePanelInner({
               className="btn btn-sm btn-primary dbw-run-btn"
               type="button"
               onClick={() => void onRunQuery()}
-              disabled={ws.queryRunning || !ws.query.trim()}
+              disabled={ws.queryRunning || !ws.query.trim() || !tunnelAlive}
+              title={!tunnelAlive ? 'Connection is down \u2014 reconnect before running a query' : undefined}
             >
-              {ws.queryRunning ? 'Running...' : 'Run \u25B6'}
+              {ws.queryRunning ? 'Running...' : !tunnelAlive ? 'Disconnected' : 'Run \u25B6'}
             </button>
             {ws.queryRunning && (
               <button

@@ -36,6 +36,8 @@ export interface AppState {
   foldersSortBy?: 'name' | 'recent'
   usePtyDaemon?: boolean
   setupWizardDismissed?: boolean
+  /** Absolute project paths where the user has approved running .devhub-ai/config.json setup scripts */
+  trustedSetupProjectPaths?: string[]
 }
 
 export interface ProcessStatus {

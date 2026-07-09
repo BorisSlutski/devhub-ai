@@ -288,6 +288,8 @@ export function DbWorkbenchView() {
   const tablesFetchGenRef = useRef<Map<string, number>>(new Map())
   const sessionsRef = useRef<DbSession[]>([])
   sessionsRef.current = sessions
+  const activeSessionIdRef = useRef<string | null>(null)
+  activeSessionIdRef.current = activeSessionId
   const editorViewRef = useRef<EditorView | null>(null)
   const connectPhaseTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
   const queryElapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -1268,7 +1270,8 @@ export function DbWorkbenchView() {
             run: (view) => {
               const { from, to } = view.state.selection.main
               const selected = view.state.sliceDoc(from, to).trim()
-              runQueryRef.current(selected || undefined)
+              const sessionId = activeSessionIdRef.current
+              if (sessionId) runQueryRef.current(sessionId, selected || undefined)
               return true
             },
           },
@@ -1717,6 +1720,7 @@ export function DbWorkbenchView() {
               sessionId={s.id}
               dbName={s.dbName}
               workspace={s.workspace}
+              tunnelAlive={s.tunnelAlive}
               isActive={s.id === activeSessionId}
               queryElapsedSec={s.id === activeSessionId ? queryElapsedSec : 0}
               tablePreviewLimit={TABLE_PREVIEW_LIMIT}

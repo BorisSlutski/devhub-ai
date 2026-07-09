@@ -66,6 +66,8 @@ async function createWindow() {
     }
   })
 
+  mainWindow.maximize()
+
   processManager.setMainWindow(mainWindow)
   const shellPath = getShellPath()
   ptyManager.setMainWindow(mainWindow)
