@@ -8,11 +8,18 @@
  */
 
 import { Trino, BasicAuth } from 'trino-client'
+import { capUnboundedSelect } from '../shared/sql-limit'
 import { normalizeWixUser } from './trino-user'
 
 // ---------------------------------------------------------------------------
 // Interfaces
 // ---------------------------------------------------------------------------
+
+export interface TableMatch {
+  catalog: string
+  schema: string
+  name: string
+}
 
 export interface QueryResult {
   columns: ColumnDef[]
@@ -22,6 +29,8 @@ export interface QueryResult {
   executionTimeMs: number
   error?: string
   truncated?: boolean
+  /** True when an unbounded SELECT/WITH was auto-capped with LIMIT. */
+  rowCapApplied?: boolean
 }
 
 export interface ColumnDef {
@@ -51,8 +60,10 @@ export interface TrinoConnection {
 // Constants
 // ---------------------------------------------------------------------------
 
-const MAX_ROWS = 10_000
+/** Workbench preview cap — UI shows 250 rows; keep fetch small for wide Trino tables. */
+const MAX_ROWS = 1_000
 const QUERY_TIMEOUT_MS = 90_000
+const CONNECT_TIMEOUT_MS = 30_000
 
 // ---------------------------------------------------------------------------
 // Internal metadata stored alongside each connection
@@ -78,6 +89,10 @@ function previewSql(sql: string, max = 120): string {
 /** Quote a Trino identifier segment (catalog/schema/table) — doubles embedded quotes. */
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`
+}
+
+function escapeSqlLike(value: string): string {
+  return value.replace(/'/g, "''")
 }
 
 // ---------------------------------------------------------------------------
@@ -112,15 +127,18 @@ class TrinoClientManager {
     })
 
     // Verify the credentials/server actually work before handing back a "connected" state.
-    // Pass `user` explicitly on the query object rather than a bare string — the
-    // underlying trino-client library only sets the X-Trino-User header from a
-    // query-level `user` field, not from the BasicAuth username, on this call path.
-    const iter = await client.query({ query: 'SELECT 1', user: normalizedUser })
-    for await (const page of iter) {
-      if (page.error) {
-        throw new Error(page.error.message)
-      }
-    }
+    await withTimeout(
+      (async () => {
+        const iter = await client.query({ query: 'SELECT 1', user: normalizedUser })
+        for await (const page of iter) {
+          if (page.error) {
+            throw new Error(page.error.message)
+          }
+        }
+      })(),
+      CONNECT_TIMEOUT_MS,
+      `Trino connection timed out after ${CONNECT_TIMEOUT_MS / 1000}s`,
+    )
 
     const meta: TrinoConnection = { id, server, catalog, schema, user: normalizedUser, connected: true }
     this.connections.set(id, {
@@ -170,11 +188,12 @@ class TrinoClientManager {
     }
 
     try {
-      console.log(`[trino-client] query start id=${id} sql=${previewSql(sql)}`)
+      const { sql: execSql, rowCapApplied } = capUnboundedSelect(sql, MAX_ROWS)
+      console.log(`[trino-client] query start id=${id} sql=${previewSql(execSql)}`)
       let iter: AsyncIterator<unknown>
       try {
         iter = await withTimeout(
-          entry.client.query({ query: sql, user: entry.meta.user }),
+          entry.client.query({ query: execSql, user: entry.meta.user }),
           Math.max(1, deadline - Date.now()),
           `Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`,
         )
@@ -245,12 +264,20 @@ class TrinoClientManager {
             rows.push(row)
           }
         }
-        if (truncated) break
+        if (truncated) {
+          await issueQueryCancel()
+          break
+        }
+      }
+
+      if (rows.length > MAX_ROWS) {
+        rows.length = MAX_ROWS
+        truncated = true
       }
 
       const executionTimeMs = Math.round((performance.now() - start) * 100) / 100
       console.log(
-        `[trino-client] query ok id=${id} total=${executionTimeMs}ms rows=${rows.length} sql=${previewSql(sql)}`,
+        `[trino-client] query ok id=${id} total=${executionTimeMs}ms rows=${rows.length} capped=${rowCapApplied} sql=${previewSql(execSql)}`,
       )
 
       return {
@@ -260,6 +287,7 @@ class TrinoClientManager {
         affectedRows: 0,
         executionTimeMs,
         truncated,
+        rowCapApplied,
       }
     } catch (err: any) {
       const executionTimeMs = Math.round((performance.now() - start) * 100) / 100
@@ -319,15 +347,53 @@ class TrinoClientManager {
   }
 
   /** List tables in catalog.schema, falling back to the connection's current catalog/schema. */
-  async listTables(id: string, catalog?: string, schema?: string): Promise<string[]> {
+  async listTables(id: string, catalog?: string, schema?: string, nameFilter?: string): Promise<string[]> {
     const entry = this.connections.get(id)
     if (!entry) throw new Error(`No connection found for id "${id}"`)
     const cat = catalog ?? entry.meta.catalog
     const sch = schema ?? entry.meta.schema
     if (!cat || !sch) throw new Error('No catalog/schema selected on this connection')
-    const res = await this.executeQuery(id, `SHOW TABLES FROM ${quoteIdent(cat)}.${quoteIdent(sch)}`)
+    const filter = nameFilter?.trim()
+    const sql = filter
+      ? `SHOW TABLES FROM ${quoteIdent(cat)}.${quoteIdent(sch)} LIKE '%${escapeSqlLike(filter)}%'`
+      : `SHOW TABLES FROM ${quoteIdent(cat)}.${quoteIdent(sch)}`
+    const res = await this.executeQuery(id, sql)
     if (res.error) throw new Error(res.error)
     return res.rows.map((r) => String(r[0]))
+  }
+
+  /**
+   * Find tables by name — scoped to catalog.schema when provided, otherwise searches
+   * across accessible catalogs via system.jdbc.tables.
+   */
+  async searchTables(
+    id: string,
+    nameFilter: string,
+    catalog?: string,
+    schema?: string,
+  ): Promise<TableMatch[]> {
+    const filter = nameFilter.trim()
+    if (catalog && schema) {
+      const names = filter
+        ? await this.listTables(id, catalog, schema, filter)
+        : await this.listTables(id, catalog, schema)
+      return names.map((name) => ({ catalog, schema, name }))
+    }
+    if (!filter) return []
+
+    const sql = `SELECT table_cat, table_schem, table_name
+FROM system.jdbc.tables
+WHERE table_type = 'TABLE'
+  AND LOWER(table_name) LIKE LOWER('%${escapeSqlLike(filter)}%')
+ORDER BY table_cat, table_schem, table_name
+LIMIT 100`
+    const res = await this.executeQuery(id, sql)
+    if (res.error) throw new Error(res.error)
+    return res.rows.map((r) => ({
+      catalog: String(r[0]),
+      schema: String(r[1]),
+      name: String(r[2]),
+    }))
   }
 
   /** DESCRIBE catalog.schema.table — returns Column/Type/Extra/Comment. */

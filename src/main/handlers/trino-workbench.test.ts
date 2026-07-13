@@ -15,6 +15,7 @@ const mockTrinoClient = {
   listCatalogs: vi.fn(),
   listSchemas: vi.fn(),
   listTables: vi.fn(),
+  searchTables: vi.fn(),
   describeTable: vi.fn(),
 }
 
@@ -69,16 +70,47 @@ describe('trino-workbench handlers', () => {
       '',
       true,
     )
-    expect(result).toEqual({ success: true, connectionId: 'trino-1' })
+    expect(result).toMatchObject({
+      success: true,
+      connectionId: 'trino-1',
+      server: 'https://trino.wixprod.net:443',
+      user: 'boris@wix.com',
+    })
     expect(mockTrinoClient.connect).toHaveBeenCalledWith(
       'trino-1',
       'https://trino.wixprod.net:443',
       'hive',
       'default',
-      'boris',
+      'boris@wix.com',
       'stored-secret',
     )
     expect(mockCredentialStore.saveTrinoCredential).not.toHaveBeenCalled()
+  })
+
+  it('trino-connect normalizes JDBC server URLs from DataGrip', async () => {
+    const connect = handlers.get('trino-connect')
+    const result = await connect!(
+      {} as never,
+      'trino-1',
+      'jdbc:trino://presto-router.wixpress.com:443',
+      '',
+      '',
+      'boriss@wix.com',
+      'secret',
+      false,
+    )
+    expect(result).toMatchObject({
+      success: true,
+      server: 'https://presto-router.wixpress.com:443',
+    })
+    expect(mockTrinoClient.connect).toHaveBeenCalledWith(
+      'trino-1',
+      'https://presto-router.wixpress.com:443',
+      '',
+      '',
+      'boriss@wix.com',
+      'secret',
+    )
   })
 
   it('trino-connect saves password in main when savePassword is true', async () => {
@@ -93,10 +125,10 @@ describe('trino-workbench handlers', () => {
       'typed-secret',
       true,
     )
-    expect(result).toEqual({ success: true, connectionId: 'trino-1' })
+    expect(result).toMatchObject({ success: true, connectionId: 'trino-1', user: 'boris@wix.com' })
     expect(mockCredentialStore.saveTrinoCredential).toHaveBeenCalledWith(
       'https://trino.wixprod.net:443',
-      'boris',
+      'boris@wix.com',
       'typed-secret',
     )
   })
@@ -115,7 +147,7 @@ describe('trino-workbench handlers', () => {
     )
     expect(mockCredentialStore.deleteTrinoCredential).toHaveBeenCalledWith(
       'https://trino.wixprod.net:443',
-      'boris',
+      'boris@wix.com',
     )
   })
 
@@ -141,5 +173,29 @@ describe('trino-workbench handlers', () => {
     const result = await hasSaved!({} as never, 'https://trino.wixprod.net:443', 'boris')
     expect(result).toEqual({ success: true, hasCredential: true })
     expect(mockCredentialStore.getTrinoCredential).not.toHaveBeenCalled()
+  })
+
+  it('trino-list-tables with filter delegates to searchTables', async () => {
+    mockTrinoClient.searchTables.mockResolvedValue([
+      { catalog: 'prod', schema: 'premium', name: 'products_dim' },
+    ])
+    const list = handlers.get('trino-list-tables')
+    const result = await list!({} as never, 'trino-1', 'prod', 'premium', 'products')
+    expect(mockTrinoClient.searchTables).toHaveBeenCalledWith('trino-1', 'products', 'prod', 'premium')
+    expect(result).toMatchObject({
+      success: true,
+      tables: [{ name: 'products_dim', catalog: 'prod', schema: 'premium' }],
+    })
+  })
+
+  it('trino-search-tables alias uses searchTables', async () => {
+    mockTrinoClient.searchTables.mockResolvedValue([
+      { catalog: 'prod', schema: 'premium', name: 'products_dim' },
+    ])
+    const search = handlers.get('trino-search-tables')
+    expect(search).toBeDefined()
+    const result = await search!({} as never, 'trino-1', 'products', 'prod', 'premium')
+    expect(mockTrinoClient.searchTables).toHaveBeenCalledWith('trino-1', 'products', 'prod', 'premium')
+    expect(result).toMatchObject({ success: true })
   })
 })

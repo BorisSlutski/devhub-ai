@@ -111,4 +111,42 @@ describe('trino-client executeQuery timeout', () => {
     expect(second.error).toBeUndefined()
     expect(second.rows).toEqual([[1]])
   })
+
+  it('auto-adds LIMIT to unbounded SELECT', async () => {
+    let capturedQuery = ''
+    mockQuery
+      .mockImplementationOnce(async () => okConnectIter())
+      .mockImplementation(async (req: { query: string }) => {
+        capturedQuery = req.query
+        return {
+          async next() {
+            return {
+              done: false,
+              value: {
+                columns: [{ name: 'id', type: 'bigint' }],
+                data: [[1]],
+              },
+            }
+          },
+          async return() {
+            return { done: true, value: undefined }
+          },
+          [Symbol.asyncIterator]() {
+            return this
+          },
+        }
+      })
+
+    const { trinoClient } = await import('./trino-client')
+    await trinoClient.connect('conn-3', 'https://trino.wixprod.net:443', 'prod', 'premium', 'boris', 'secret')
+
+    const result = await trinoClient.executeQuery(
+      'conn-3',
+      'select * from prod.premium.products_dim',
+    )
+
+    expect(capturedQuery).toMatch(/LIMIT 1001\s*$/i)
+    expect(result.rowCapApplied).toBe(true)
+    expect(result.error).toBeUndefined()
+  })
 })

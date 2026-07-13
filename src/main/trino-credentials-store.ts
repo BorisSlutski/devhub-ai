@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { app, safeStorage } from 'electron'
-import { normalizeWixUser } from './trino-user'
+import { normalizeWixUser, parseTrinoServerInput } from './trino-user'
 
 const getStorePath = () => {
   const userDataPath = app.getPath('userData')
@@ -10,7 +10,8 @@ const getStorePath = () => {
 }
 
 function credentialKey(server: string, user: string): string {
-  return `${server.trim().toLowerCase()}::${normalizeWixUser(user).toLowerCase()}`
+  const { server: resolved } = parseTrinoServerInput(server)
+  return `${resolved.toLowerCase()}::${normalizeWixUser(user).toLowerCase()}`
 }
 
 export function hasTrinoCredential(server: string, user: string): boolean {

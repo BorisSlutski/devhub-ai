@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { trinoClient } from '../trino-client'
 import {
   saveTrinoCredential,
@@ -6,6 +6,7 @@ import {
   deleteTrinoCredential,
   hasTrinoCredential,
 } from '../trino-credentials-store'
+import { normalizeWixUser, parseTrinoServerInput } from '../trino-user'
 
 export interface TrinoProfile {
   id: string
@@ -29,7 +30,8 @@ export function registerTrinoWorkbenchHandlers() {
 
   ipcMain.handle('trino-has-saved-credential', async (_event, server: string, user: string) => {
     try {
-      return { success: true, hasCredential: hasTrinoCredential(server, user) }
+      const resolvedServer = parseTrinoServerInput(server).server
+      return { success: true, hasCredential: hasTrinoCredential(resolvedServer, user) }
     } catch (err: any) {
       return { success: false, hasCredential: false, error: err.message }
     }
@@ -48,42 +50,65 @@ export function registerTrinoWorkbenchHandlers() {
       savePassword?: boolean,
     ) => {
       try {
-        const resolvedPassword = password || getTrinoCredential(server, user) || ''
+        const parsed = parseTrinoServerInput(server)
+        const resolvedServer = parsed.server
+        if (!resolvedServer) {
+          return { success: false, error: 'Server is required' }
+        }
+        const resolvedCatalog = (catalog || parsed.catalog || '').trim()
+        const resolvedSchema = (schema || parsed.schema || '').trim()
+        const resolvedUser = normalizeWixUser(user)
+        const resolvedPassword =
+          password || getTrinoCredential(resolvedServer, resolvedUser) || ''
         if (!resolvedPassword) {
           return { success: false, error: 'Password is required' }
         }
 
-        console.log(`[trino-workbench] connecting id=${connectionId} server=${server}`)
+        console.log(
+          `[trino-workbench] connecting id=${connectionId} server=${resolvedServer} catalog=${resolvedCatalog || '(none)'} schema=${resolvedSchema || '(none)'}`,
+        )
         const conn = await trinoClient.connect(
           connectionId,
-          server,
-          catalog,
-          schema,
-          user,
+          resolvedServer,
+          resolvedCatalog,
+          resolvedSchema,
+          resolvedUser,
           resolvedPassword,
         )
 
         if (savePassword) {
           if (password) {
             try {
-              saveTrinoCredential(server, user, password)
+              saveTrinoCredential(resolvedServer, resolvedUser, password)
             } catch (saveErr: any) {
               return {
                 success: true,
                 connectionId: conn.id,
+                server: resolvedServer,
+                catalog: resolvedCatalog,
+                schema: resolvedSchema,
+                user: resolvedUser,
                 credentialWarning: saveErr?.message ?? 'Failed to save password',
               }
             }
           }
         } else {
           try {
-            deleteTrinoCredential(server, user)
+            deleteTrinoCredential(resolvedServer, resolvedUser)
           } catch {
             // non-fatal — connection already succeeded
           }
         }
 
-        return { success: true, connectionId: conn.id }
+        console.log(`[trino-workbench] connected id=${conn.id}`)
+        return {
+          success: true,
+          connectionId: conn.id,
+          server: resolvedServer,
+          catalog: resolvedCatalog,
+          schema: resolvedSchema,
+          user: resolvedUser,
+        }
       } catch (err: any) {
         console.error('[trino-workbench] connect error:', err.message)
         return { success: false, error: err.message }
@@ -176,22 +201,49 @@ export function registerTrinoWorkbenchHandlers() {
     },
   )
 
-  ipcMain.handle(
-    'trino-list-tables',
-    async (_event, connectionId: string, catalog?: string, schema?: string) => {
-      try {
-        const names = await trinoClient.listTables(connectionId, catalog, schema)
-        const tables = names.map((name) => ({
-          name,
+  const listOrSearchTables = async (
+    _event: IpcMainInvokeEvent,
+    connectionId: string,
+    catalog?: string,
+    schema?: string,
+    nameFilter?: string,
+  ) => {
+    try {
+      const filter = nameFilter?.trim()
+      if (filter) {
+        const matches = await trinoClient.searchTables(connectionId, filter, catalog, schema)
+        const tables = matches.map((m) => ({
+          name: m.name,
           type: 'TABLE' as const,
           engine: null,
           rows: null,
           comment: '',
+          catalog: m.catalog,
+          schema: m.schema,
         }))
         return { success: true, tables }
-      } catch (err: any) {
-        return { success: false, tables: [], error: err.message }
       }
-    },
+      const names = await trinoClient.listTables(connectionId, catalog, schema)
+      const tables = names.map((name) => ({
+        name,
+        type: 'TABLE' as const,
+        engine: null,
+        rows: null,
+        comment: '',
+        catalog: catalog ?? '',
+        schema: schema ?? '',
+      }))
+      return { success: true, tables }
+    } catch (err: any) {
+      return { success: false, tables: [], error: err.message }
+    }
+  }
+
+  ipcMain.handle('trino-list-tables', listOrSearchTables)
+  // Alias — arg order matches preload trinoSearchTables(connectionId, query, catalog?, schema?)
+  ipcMain.handle(
+    'trino-search-tables',
+    async (event, connectionId: string, query: string, catalog?: string, schema?: string) =>
+      listOrSearchTables(event, connectionId, catalog, schema, query),
   )
 }

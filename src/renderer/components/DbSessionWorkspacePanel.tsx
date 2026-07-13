@@ -1,4 +1,4 @@
-import React, { memo } from 'react'
+import React from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import type { Extension } from '@codemirror/state'
 
@@ -8,6 +8,8 @@ interface TableInfo {
   engine: string | null
   rows: number | null
   comment: string
+  catalog?: string
+  schema?: string
 }
 
 interface ColumnInfo {
@@ -68,6 +70,23 @@ export interface DbSessionWorkspacePanelProps {
   onTableClick: (tableName: string) => void
   onActiveResultTab: (tab: 'results' | 'messages') => void
   onClearMessages: () => void
+  /** Trino: show catalog.schema.table instead of bare table name. */
+  formatTableDisplayName?: (table: TableInfo) => string
+  /** Trino: type catalog.schema.table or table name — auto-fills catalog/schema. */
+  tableSearch?: {
+    value: string
+    onChange: (value: string) => void
+  }
+  /** Trino: pick catalog/schema when not set at connect (DataGrip-style empty Database). */
+  catalogBrowse?: {
+    catalogs: string[]
+    schemas: string[]
+    catalog: string
+    schema: string
+    loading: boolean
+    onCatalogChange: (catalog: string) => void
+    onSchemaChange: (schema: string) => void
+  }
 }
 
 function DbSessionWorkspacePanelInner({
@@ -90,6 +109,9 @@ function DbSessionWorkspacePanelInner({
   onTableClick,
   onActiveResultTab,
   onClearMessages,
+  catalogBrowse,
+  formatTableDisplayName,
+  tableSearch,
 }: DbSessionWorkspacePanelProps) {
   const displayRows = ws.result?.rows.slice(0, resultsDisplayCap) ?? []
   const hiddenRowCount =
@@ -106,14 +128,87 @@ function DbSessionWorkspacePanelInner({
         <div className="dbw-sidebar-header">
           <span className="dbw-sidebar-title">{dbName}</span>
           <span className="dbw-sidebar-count">
-            {ws.tablesLoading && ws.tables.length > 0
-              ? 'Refreshing…'
-              : `${ws.tables.length} table${ws.tables.length !== 1 ? 's' : ''}`}
+            {catalogBrowse && (!catalogBrowse.catalog || !catalogBrowse.schema)
+              ? catalogBrowse.loading
+                ? 'Discovering…'
+                : 'Pick catalog & schema'
+              : ws.tablesLoading && ws.tables.length > 0
+                ? 'Refreshing…'
+                : `${ws.tables.length} table${ws.tables.length !== 1 ? 's' : ''}`}
           </span>
         </div>
 
         <div className="dbw-sidebar-list">
-          {ws.tablesError ? (
+          {catalogBrowse ? (
+            <div className="dbw-sidebar-meta">
+              {tableSearch ? (
+                <label className="dbw-sidebar-meta-label">
+                  Find table
+                  <input
+                    type="search"
+                    className="dbw-sidebar-meta-search"
+                    value={tableSearch.value}
+                    onChange={(e) => tableSearch.onChange(e.target.value)}
+                    placeholder="prod.premium.name or name…"
+                    spellCheck={false}
+                  />
+                </label>
+              ) : null}
+              {!catalogBrowse.catalog && !catalogBrowse.loading && !tableSearch?.value ? (
+                <p className="dbw-sidebar-meta-hint">
+                  Type a table name above (optional: catalog.schema.name) — dropdowns are optional.
+                </p>
+              ) : null}
+              {catalogBrowse.loading && !catalogBrowse.catalog ? (
+                <div className="dbw-sidebar-loading">
+                  <span>Loading catalogs…</span>
+                </div>
+              ) : (
+                <>
+                  <label className="dbw-sidebar-meta-label">
+                    Catalog
+                    <select
+                      className="dbw-sidebar-meta-select"
+                      value={catalogBrowse.catalog}
+                      onChange={(e) => catalogBrowse.onCatalogChange(e.target.value)}
+                      disabled={catalogBrowse.loading}
+                    >
+                      <option value="">Select catalog…</option>
+                      {catalogBrowse.catalogs.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="dbw-sidebar-meta-label">
+                    Schema
+                    <select
+                      className="dbw-sidebar-meta-select"
+                      value={catalogBrowse.schema}
+                      onChange={(e) => catalogBrowse.onSchemaChange(e.target.value)}
+                      disabled={!catalogBrowse.catalog || catalogBrowse.loading}
+                    >
+                      <option value="">
+                        {!catalogBrowse.catalog
+                          ? 'Select catalog first…'
+                          : catalogBrowse.loading && catalogBrowse.schemas.length === 0
+                            ? 'Loading schemas…'
+                            : 'Select schema…'}
+                      </option>
+                      {catalogBrowse.schemas.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {catalogBrowse && (!catalogBrowse.catalog || !catalogBrowse.schema) ? null : ws.tablesError ? (
             <div className="dbw-sidebar-error">
               <div>{ws.tablesError}</div>
               <button type="button" className="btn btn-sm" onClick={onFetchTables}>
@@ -129,10 +224,17 @@ function DbSessionWorkspacePanelInner({
             </div>
           ) : ws.tables.length === 0 ? (
             <div className="dbw-sidebar-empty">
-              {ws.tablesLoading ? 'Loading tables...' : 'No tables found'}
+              {ws.tablesLoading
+                ? 'Loading tables...'
+                : tableSearch?.value
+                  ? 'No matching tables — try another name or catalog.schema'
+                  : catalogBrowse?.catalog && catalogBrowse?.schema
+                    ? 'No tables in this schema — type a table name above to search'
+                    : 'No tables found'}
             </div>
           ) : (
             ws.tables.map((t) => {
+              const displayName = formatTableDisplayName ? formatTableDisplayName(t) : t.name
               const isExpanded = ws.expandedTable === t.name
               const cols = ws.tableColumns[t.name]
               const isLoadingCols = ws.columnsLoading === t.name
@@ -152,9 +254,9 @@ function DbSessionWorkspacePanelInner({
                     <button
                       className="dbw-table-name"
                       onClick={() => onTableClick(t.name)}
-                      title={`SELECT * FROM ${t.name} LIMIT ${tablePreviewLimit}`}
+                      title={`Load SELECT * FROM ${displayName} LIMIT ${tablePreviewLimit} into editor (click Run to execute)`}
                     >
-                      {t.name}
+                      {displayName}
                     </button>
                     {t.type === 'VIEW' && <span className="dbw-table-badge">VIEW</span>}
                   </div>
@@ -382,19 +484,4 @@ function DbSessionWorkspacePanelInner({
   )
 }
 
-function panelPropsEqual(
-  prev: DbSessionWorkspacePanelProps,
-  next: DbSessionWorkspacePanelProps,
-): boolean {
-  return (
-    prev.sessionId === next.sessionId &&
-    prev.isActive === next.isActive &&
-    prev.workspace === next.workspace &&
-    prev.queryElapsedSec === next.queryElapsedSec &&
-    prev.cmExtensions === next.cmExtensions &&
-    prev.tablePreviewLimit === next.tablePreviewLimit &&
-    prev.resultsDisplayCap === next.resultsDisplayCap
-  )
-}
-
-export const DbSessionWorkspacePanel = memo(DbSessionWorkspacePanelInner, panelPropsEqual)
+export const DbSessionWorkspacePanel = DbSessionWorkspacePanelInner

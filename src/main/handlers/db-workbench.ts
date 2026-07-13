@@ -280,23 +280,44 @@ export function registerDbWorkbenchHandlers() {
 
   // Execute SQL query
   ipcMain.handle('db-execute-query', async (_event, connectionId: string, sqlText: string) => {
+    console.log(
+      `[db-workbench] db-execute-query invoked connection=${connectionId} sql=${sqlText.trim().replace(/\s+/g, ' ').slice(0, 80)}`,
+    )
     touchConnection(connectionId)
-    const ensureStarted = Date.now()
-    const ensureErr = await ensureDbConnectionWithTimeout(connectionId)
-    const ensureMs = Date.now() - ensureStarted
-    if (ensureErr) {
-      console.error(
-        `[db-workbench] query failed connection=${connectionId} ensure=${ensureMs}ms sql=${sqlText.trim().slice(0, 120)} err=${ensureErr}`,
-      )
+
+    if (mysqlClient.isQueryInFlight(connectionId)) {
+      const msg = 'A query is already running on this connection — wait or click Cancel.'
+      console.warn(`[db-workbench] query rejected connection=${connectionId}: in flight`)
       return {
         columns: [],
         rows: [],
         rowCount: 0,
         affectedRows: 0,
         executionTimeMs: 0,
-        error: ensureErr,
+        error: msg,
       }
     }
+
+    let ensureMs = 0
+    if (!mysqlClient.isConnected(connectionId)) {
+      const ensureStarted = Date.now()
+      const ensureErr = await ensureDbConnectionWithTimeout(connectionId)
+      ensureMs = Date.now() - ensureStarted
+      if (ensureErr) {
+        console.error(
+          `[db-workbench] query failed connection=${connectionId} ensure=${ensureMs}ms sql=${sqlText.trim().slice(0, 120)} err=${ensureErr}`,
+        )
+        return {
+          columns: [],
+          rows: [],
+          rowCount: 0,
+          affectedRows: 0,
+          executionTimeMs: 0,
+          error: ensureErr,
+        }
+      }
+    }
+
     const started = Date.now()
     const preview = sqlText.trim().replace(/\s+/g, ' ').slice(0, 120)
     console.log(`[db-workbench] query start connection=${connectionId} ensure=${ensureMs}ms sql=${preview}`)

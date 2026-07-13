@@ -1,5 +1,6 @@
 /**
- * Append LIMIT to bare SELECT/WITH so MySQL does not stream millions of rows over the tunnel.
+ * Append LIMIT to bare SELECT/WITH so workbench queries do not scan full tables
+ * (MySQL over SSH tunnel, Trino over HTTPS).
  */
 export function capUnboundedSelect(
   sql: string,

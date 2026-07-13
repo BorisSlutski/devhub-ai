@@ -41,6 +41,14 @@ describe('trino-credentials-store', () => {
     expect(getTrinoCredential('https://trino.wixprod.net:443', 'boris')).toBeNull()
   })
 
+  it('matches JDBC server URLs to https REST keys', async () => {
+    const { saveTrinoCredential, getTrinoCredential } = await import('./trino-credentials-store')
+    saveTrinoCredential('https://presto-router.wixpress.com:443', 'boris', 'secret')
+    expect(
+      getTrinoCredential('jdbc:trino://presto-router.wixpress.com:443', 'boris@wix.com'),
+    ).toBe('secret')
+  })
+
   it('persists encrypted map to disk', async () => {
     const { saveTrinoCredential } = await import('./trino-credentials-store')
     saveTrinoCredential('https://trino.wixprod.net:443', 'boris', 'secret')

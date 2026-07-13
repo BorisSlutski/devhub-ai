@@ -413,7 +413,10 @@ const api = {
   dbExecuteQuery: (connectionId: string, sql: string): Promise<{
     columns: any[]; rows: any[][]; rowCount: number;
     affectedRows: number; executionTimeMs: number; error?: string;
-  }> => ipcRenderer.invoke('db-execute-query', connectionId, sql),
+  }> => {
+    console.log(`[preload] dbExecuteQuery connection=${connectionId} sql=${sql.trim().slice(0, 80)}`)
+    return ipcRenderer.invoke('db-execute-query', connectionId, sql)
+  },
   dbCancelQuery: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('db-cancel-query', connectionId),
   dbReconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
@@ -440,7 +443,16 @@ const api = {
     user: string,
     password: string,
     savePassword?: boolean,
-  ): Promise<{ success: boolean; connectionId?: string; error?: string; credentialWarning?: string }> =>
+  ): Promise<{
+    success: boolean
+    connectionId?: string
+    server?: string
+    catalog?: string
+    schema?: string
+    user?: string
+    error?: string
+    credentialWarning?: string
+  }> =>
     ipcRenderer.invoke('trino-connect', connectionId, server, catalog, schema, user, password, savePassword),
   trinoHasSavedCredential: (
     server: string,
@@ -466,9 +478,9 @@ const api = {
   trinoListSchemas: (connectionId: string, catalog: string): Promise<{
     success: boolean; schemas: string[]; error?: string;
   }> => ipcRenderer.invoke('trino-list-schemas', connectionId, catalog),
-  trinoListTables: (connectionId: string, catalog?: string, schema?: string): Promise<{
+  trinoListTables: (connectionId: string, catalog?: string, schema?: string, nameFilter?: string): Promise<{
     success: boolean; tables: any[]; error?: string;
-  }> => ipcRenderer.invoke('trino-list-tables', connectionId, catalog, schema),
+  }> => ipcRenderer.invoke('trino-list-tables', connectionId, catalog, schema, nameFilter),
   trinoDescribeTable: (
     connectionId: string,
     tableName: string,

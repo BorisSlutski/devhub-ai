@@ -44,6 +44,8 @@ interface QueryResult {
 }
 
 const CANCEL_CLIENT_TIMEOUT_MS = 30_000
+/** Slightly above main-process EXEC_QUERY_TIMEOUT_MS so the UI never sticks on "Running". */
+const QUERY_CLIENT_TIMEOUT_MS = 95_000
 const TABLE_PREVIEW_LIMIT = 25
 /** Cap rendered result rows so tab switches stay fast with large result sets. */
 const RESULTS_DISPLAY_CAP = 250
@@ -283,6 +285,8 @@ export function DbWorkbenchView() {
     (sessionId: string, connectionId: string, tableName: string) => void
   >(() => {})
   const queryRunIdRef = useRef(0)
+  /** True while renderer awaits dbExecuteQuery — cleared on HMR dispose / completion. */
+  const queryIpcInFlightRef = useRef(false)
   const columnsDescribeGenRef = useRef<Map<string, number>>(new Map())
   const tablesFetchGenRef = useRef<Map<string, number>>(new Map())
   const sessionsRef = useRef<DbSession[]>([])
@@ -379,10 +383,38 @@ export function DbWorkbenchView() {
     })
   }, [sessions])
 
-  // HMR / remount can leave "Running…" with no in-flight IPC — clear stale UI state.
+  const stopQueryElapsedTimer = useCallback(() => {
+    if (queryElapsedTimerRef.current) {
+      clearInterval(queryElapsedTimerRef.current)
+      queryElapsedTimerRef.current = null
+    }
+    setQueryElapsedSec(0)
+  }, [])
+
+  const startQueryElapsedTimer = useCallback(() => {
+    stopQueryElapsedTimer()
+    setQueryElapsedSec(0)
+    queryElapsedTimerRef.current = setInterval(() => {
+      setQueryElapsedSec((s) => s + 1)
+    }, 1000)
+  }, [stopQueryElapsedTimer])
+
+  // HMR: orphaned IPC promises leave queryRunning=true with no main work in flight.
   useEffect(() => {
-    const stuck = sessions.some((s) => s.workspace.queryRunning)
-    if (!stuck) return
+    if (!import.meta.hot) return
+    const dispose = () => {
+      queryIpcInFlightRef.current = false
+      queryRunIdRef.current += 1
+    }
+    import.meta.hot.dispose(dispose)
+    return () => import.meta.hot?.dispose(dispose)
+  }, [])
+
+  useEffect(() => {
+    const staleRunning = sessions.some(
+      (s) => s.workspace.queryRunning && !queryIpcInFlightRef.current,
+    )
+    if (!staleRunning) return
     queryRunIdRef.current += 1
     stopQueryElapsedTimer()
     setSessions((prev) =>
@@ -397,6 +429,28 @@ export function DbWorkbenchView() {
         void window.api.dbCancelQuery(s.connectionId).catch(() => undefined)
       }
     })
+  }, [sessions, stopQueryElapsedTimer])
+
+  // Full remount (not fast refresh): same stale Running cleanup once on load.
+  useEffect(() => {
+    const stuck = sessionsRef.current.some((s) => s.workspace.queryRunning)
+    if (!stuck) return
+    queryRunIdRef.current += 1
+    queryIpcInFlightRef.current = false
+    stopQueryElapsedTimer()
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.workspace.queryRunning
+          ? { ...s, workspace: { ...s.workspace, queryRunning: false } }
+          : s,
+      ),
+    )
+    void window.api.dbListSessions().then((res) => {
+      for (const s of res.sessions ?? []) {
+        void window.api.dbCancelQuery(s.connectionId).catch(() => undefined)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
   }, [])
 
   const patchSession = useCallback((sessionId: string, patch: Partial<DbSessionWorkspace>) => {
@@ -431,25 +485,10 @@ export function DbWorkbenchView() {
     }
   }, [])
 
-  const stopQueryElapsedTimer = useCallback(() => {
-    if (queryElapsedTimerRef.current) {
-      clearInterval(queryElapsedTimerRef.current)
-      queryElapsedTimerRef.current = null
-    }
-    setQueryElapsedSec(0)
-  }, [])
-
-  const startQueryElapsedTimer = useCallback(() => {
-    stopQueryElapsedTimer()
-    setQueryElapsedSec(0)
-    queryElapsedTimerRef.current = setInterval(() => {
-      setQueryElapsedSec((s) => s + 1)
-    }, 1000)
-  }, [stopQueryElapsedTimer])
-
   const abortInFlightQueryForConnection = useCallback(
     (connectionId: string) => {
       queryRunIdRef.current += 1
+      queryIpcInFlightRef.current = false
       stopQueryElapsedTimer()
       setSessions((prev) =>
         prev.map((s) =>
@@ -1031,42 +1070,32 @@ export function DbWorkbenchView() {
 
   const handleTableClickForSession = useCallback(
     (sessionId: string, tableName: string) => {
-      const session = sessionsRef.current.find((s) => s.id === sessionId)
-      if (session?.workspace.queryRunning) {
-        updateSessionWorkspace(sessionId, (w) => ({
-          messages: [...w.messages, 'A query is still running — Cancel or wait.'],
-          activeResultTab: 'messages',
-        }))
-        return
-      }
       const sql = `SELECT * FROM \`${tableName}\` LIMIT ${TABLE_PREVIEW_LIMIT};`
       patchSession(sessionId, { query: sql, expandedTable: tableName })
-      void runQueryRef.current(sessionId, sql)
     },
-    [patchSession, updateSessionWorkspace],
+    [patchSession],
   )
 
   /* ── Run Query ── */
 
   const runQueryForSession = useCallback(
     async (sessionId: string, sqlOverride?: string) => {
-      let connectionId: string | null = null
-      let sql = ''
-      let skippedBecauseRunning = false
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+
+      const sql = (sqlOverride ?? session.workspace.query).trim()
+      if (!sql) return
+
+      const connectionId = session.connectionId
       const runId = ++queryRunIdRef.current
-      setSessions((prev) => {
-        const session = prev.find((s) => s.id === sessionId)
-        if (!session) return prev
-        connectionId = session.connectionId
-        sql = (sqlOverride ?? session.workspace.query).trim()
-        if (!sql || session.workspace.queryRunning) {
-          if (sql && session.workspace.queryRunning) {
-            skippedBecauseRunning = true
-          }
-          connectionId = null
-          return prev
-        }
-        return prev.map((s) =>
+
+      // Supersede a stuck or in-flight query (common after Vite HMR during dev).
+      if (session.workspace.queryRunning) {
+        void window.api.dbCancelQuery(connectionId).catch(() => undefined)
+      }
+
+      setSessions((prev) =>
+        prev.map((s) =>
           s.id === sessionId
             ? {
                 ...s,
@@ -1078,29 +1107,34 @@ export function DbWorkbenchView() {
                 },
               }
             : s,
-        )
-      })
-      if (!connectionId || !sql) {
-        if (skippedBecauseRunning) {
-          updateSessionWorkspace(sessionId, (w) => ({
-            messages: [...w.messages, 'A query is still running — Cancel or wait.'],
-            activeResultTab: 'messages',
-          }))
-        }
-        return
-      }
+        ),
+      )
 
       const normalized = normalizeSqlSingleQuotedTableIds(sql)
+      let execSql = sql
       if (normalized.changed) {
-        sql = normalized.sql
-        patchSession(sessionId, { query: sql })
+        execSql = normalized.sql
+        patchSession(sessionId, { query: execSql })
       }
 
       startQueryElapsedTimer()
+      queryIpcInFlightRef.current = true
       try {
-        const res = await window.api.dbExecuteQuery(connectionId, sql)
+        const res = await Promise.race([
+          window.api.dbExecuteQuery(connectionId, execSql),
+          new Promise<never>((_, reject) => {
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `Query timed out after ${QUERY_CLIENT_TIMEOUT_MS / 1000}s (client) — click Cancel or reconnect.`,
+                  ),
+                ),
+              QUERY_CLIENT_TIMEOUT_MS,
+            )
+          }),
+        ])
         if (runId !== queryRunIdRef.current) return
-        stopQueryElapsedTimer()
         if (res.error) {
           const msgs = [`Error: ${res.error}`]
           if (/timed out|lost|closed|ECONNRESET|cancelled/i.test(res.error)) {
@@ -1131,7 +1165,7 @@ export function DbWorkbenchView() {
           if (res.truncated) {
             notes.push('Showing first 10,000 rows (more may exist — add a narrower WHERE or LIMIT).')
           }
-          const preview = parseStarSelectPreview(sql)
+          const preview = parseStarSelectPreview(execSql)
           updateSessionWorkspace(sessionId, (w) => {
             const patch: Partial<DbSessionWorkspace> = {
               queryRunning: false,
@@ -1156,7 +1190,6 @@ export function DbWorkbenchView() {
         }
       } catch (err) {
         if (runId !== queryRunIdRef.current) return
-        stopQueryElapsedTimer()
         const errMsg = err instanceof Error ? err.message : String(err)
         updateSessionWorkspace(sessionId, (w) => ({
           queryRunning: false,
@@ -1169,7 +1202,9 @@ export function DbWorkbenchView() {
           setConnectError('Connection lost or timed out. Retry loading tables or run the query again.')
         }
       } finally {
-        if (runId !== queryRunIdRef.current) {
+        queryIpcInFlightRef.current = false
+        if (runId === queryRunIdRef.current) {
+          stopQueryElapsedTimer()
           updateSessionWorkspace(sessionId, (w) =>
             w.queryRunning ? { queryRunning: false } : {},
           )
@@ -1199,6 +1234,7 @@ export function DbWorkbenchView() {
 
       const connectionId = session.connectionId
       queryRunIdRef.current += 1
+      queryIpcInFlightRef.current = false
       stopQueryElapsedTimer()
       updateSessionWorkspace(sessionId, (w) => ({ queryRunning: false }))
 

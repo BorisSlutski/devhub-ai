@@ -16,6 +16,7 @@ interface QueryResult {
   executionTimeMs: number
   error?: string
   truncated?: boolean
+  rowCapApplied?: boolean
 }
 
 interface TableInfo {
@@ -24,6 +25,8 @@ interface TableInfo {
   engine: string | null
   rows: number | null
   comment: string
+  catalog?: string
+  schema?: string
 }
 
 interface ColumnInfo {
@@ -40,11 +43,56 @@ const CANCEL_CLIENT_TIMEOUT_MS = 30_000
 const TABLE_PREVIEW_LIMIT = 25
 const RESULTS_DISPLAY_CAP = 250
 const TABLES_FETCH_TIMEOUT_MS = 50_000
+const TABLE_SEARCH_DEBOUNCE_MS = 350
+
+interface ParsedTableNavigatorInput {
+  catalog?: string
+  schema?: string
+  tableFilter: string
+}
+
+function parseTableNavigatorInput(raw: string): ParsedTableNavigatorInput {
+  const trimmed = raw.trim()
+  if (!trimmed) return { tableFilter: '' }
+  const parts = trimmed.split('.').map((p) => p.trim()).filter(Boolean)
+  if (parts.length >= 3) {
+    return { catalog: parts[0], schema: parts[1], tableFilter: parts.slice(2).join('.') }
+  }
+  if (parts.length === 2) {
+    return { schema: parts[0], tableFilter: parts[1] }
+  }
+  return { tableFilter: parts[0] }
+}
+
+function extractQualifiedTableFromSql(sql: string): ParsedTableNavigatorInput | null {
+  const m = sql.match(
+    /\b(?:FROM|JOIN)\s+([a-zA-Z_][\w$]*)\.([a-zA-Z_][\w$]*)\.([a-zA-Z_][\w$]*)/i,
+  )
+  if (m) return { catalog: m[1], schema: m[2], tableFilter: m[3] }
+  const m2 = sql.match(/\b(?:FROM|JOIN)\s+([a-zA-Z_][\w$]*)\.([a-zA-Z_][\w$]*)/i)
+  if (m2) return { schema: m2[1], tableFilter: m2[2] }
+  return null
+}
+
+function tableLocation(
+  session: TrinoSession,
+  tableName: string,
+): { catalog: string; schema: string } {
+  const row = session.workspace.tables.find((t) => t.name === tableName)
+  return {
+    catalog: row?.catalog || session.catalog,
+    schema: row?.schema || session.schema,
+  }
+}
 
 interface TrinoSessionWorkspace {
   tables: TableInfo[]
   tablesLoading: boolean
   tablesError: string | null
+  /** Trino: catalogs from SHOW CATALOGS when not set at connect time. */
+  catalogs: string[]
+  schemas: string[]
+  metaLoading: boolean
   expandedTable: string | null
   tableColumns: Record<string, ColumnInfo[]>
   columnsLoading: string | null
@@ -54,6 +102,7 @@ interface TrinoSessionWorkspace {
   queryRunning: boolean
   activeResultTab: 'results' | 'messages'
   messages: string[]
+  tableSearch: string
 }
 
 interface TrinoSession {
@@ -73,6 +122,9 @@ function createEmptyWorkspace(): TrinoSessionWorkspace {
     tables: [],
     tablesLoading: false,
     tablesError: null,
+    catalogs: [],
+    schemas: [],
+    metaLoading: false,
     expandedTable: null,
     tableColumns: {},
     columnsLoading: null,
@@ -82,6 +134,7 @@ function createEmptyWorkspace(): TrinoSessionWorkspace {
     queryRunning: false,
     activeResultTab: 'results',
     messages: [],
+    tableSearch: '',
   }
 }
 
@@ -146,7 +199,12 @@ export function TrinoWorkbenchView() {
 
   const runQueryRef = useRef<(sessionId: string, sqlOverride?: string) => void>(() => {})
   const fetchTablesRef = useRef<(sessionId: string, forceRefresh?: boolean) => void>(() => {})
+  const discoverCatalogsRef = useRef<(sessionId: string) => void>(() => {})
+  const discoverSchemasRef = useRef<(sessionId: string, catalog: string) => void>(() => {})
+  const searchTablesRef = useRef<(sessionId: string, input: string) => void>(() => {})
+  const tableSearchTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const queryRunIdRef = useRef(0)
+  const queryIpcInFlightRef = useRef(false)
   const sessionsRef = useRef<TrinoSession[]>([])
   sessionsRef.current = sessions
   const editorViewRef = useRef<EditorView | null>(null)
@@ -170,6 +228,47 @@ export function TrinoWorkbenchView() {
     }
   }, [sessions, activeSessionId])
 
+  // Restore live main-process connections after renderer remount (Vite HMR / tab switch).
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const res = await window.api.trinoListConnections()
+      if (cancelled || !res.success || !res.connections?.length) return
+      if (sessionsRef.current.length > 0) return
+
+      const restored: TrinoSession[] = res.connections.map((c) => ({
+        id: c.id,
+        connectionId: c.id,
+        server: c.server,
+        catalog: c.catalog,
+        schema: c.schema,
+        user: c.user,
+        label: `${c.catalog || c.server}${c.schema ? ` / ${c.schema}` : ''}`,
+        connected: true,
+        workspace: {
+          ...createEmptyWorkspace(),
+          ...(c.catalog && c.schema ? { tablesLoading: true } : { metaLoading: true }),
+        },
+      }))
+      sessionsRef.current = restored
+      setSessions(restored)
+      setActiveSessionId(restored[restored.length - 1].id)
+
+      for (const s of restored) {
+        if (s.catalog && s.schema) {
+          queueMicrotask(() => void fetchTablesRef.current(s.id, true))
+        } else if (s.catalog) {
+          queueMicrotask(() => void discoverSchemasRef.current(s.id, s.catalog))
+        } else {
+          queueMicrotask(() => void discoverCatalogsRef.current(s.id))
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   useEffect(() => {
     return () => {
       if (queryElapsedTimerRef.current) clearInterval(queryElapsedTimerRef.current)
@@ -190,11 +289,59 @@ export function TrinoWorkbenchView() {
     queryElapsedTimerRef.current = setInterval(() => setQueryElapsedSec((s) => s + 1), 1000)
   }, [stopQueryElapsedTimer])
 
+  // HMR: orphaned IPC promises leave queryRunning=true with no main work in flight.
+  useEffect(() => {
+    if (!import.meta.hot) return
+    const dispose = () => {
+      queryIpcInFlightRef.current = false
+      queryRunIdRef.current += 1
+    }
+    import.meta.hot.dispose(dispose)
+    return () => import.meta.hot?.dispose(dispose)
+  }, [])
+
+  useEffect(() => {
+    const staleRunning = sessions.some(
+      (s) => s.workspace.queryRunning && !queryIpcInFlightRef.current,
+    )
+    if (!staleRunning) return
+    queryRunIdRef.current += 1
+    stopQueryElapsedTimer()
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.workspace.queryRunning
+          ? { ...s, workspace: { ...s.workspace, queryRunning: false } }
+          : s,
+      ),
+    )
+    void window.api.trinoListConnections().then((res) => {
+      for (const c of res.connections ?? []) {
+        void window.api.trinoCancelQuery(c.id).catch(() => undefined)
+      }
+    })
+  }, [sessions, stopQueryElapsedTimer])
+
   const patchSession = useCallback((sessionId: string, patch: Partial<TrinoSessionWorkspace>) => {
     setSessions((prev) =>
       prev.map((s) => (s.id === sessionId ? { ...s, workspace: { ...s.workspace, ...patch } } : s)),
     )
   }, [])
+
+  const patchTrinoSession = useCallback(
+    (sessionId: string, patch: Partial<Pick<TrinoSession, 'catalog' | 'schema' | 'label'>>) => {
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id !== sessionId) return s
+          const next = { ...s, ...patch }
+          if (patch.catalog !== undefined || patch.schema !== undefined) {
+            next.label = `${next.catalog || next.server}${next.schema ? ` / ${next.schema}` : ''}`
+          }
+          return next
+        }),
+      )
+    },
+    [],
+  )
 
   const updateSessionWorkspace = useCallback(
     (sessionId: string, fn: (ws: TrinoSessionWorkspace) => Partial<TrinoSessionWorkspace>) => {
@@ -255,32 +402,44 @@ export function TrinoWorkbenchView() {
       if (res.credentialWarning) {
         setConnectWarning(`Connected, but failed to save password: ${res.credentialWarning}`)
       }
+      const resolvedServer = res.server ?? form.server.trim()
+      const resolvedCatalog = res.catalog ?? form.catalog.trim()
+      const resolvedSchema = res.schema ?? form.schema.trim()
+      const resolvedUser = res.user ?? form.user.trim()
       saveLastConnection({
-        server: form.server.trim(),
-        catalog: form.catalog.trim(),
-        schema: form.schema.trim(),
-        user: form.user.trim(),
+        server: resolvedServer,
+        catalog: resolvedCatalog,
+        schema: resolvedSchema,
+        user: resolvedUser,
       })
       const newSession: TrinoSession = {
         id: connectionId,
         connectionId,
-        server: form.server.trim(),
-        catalog: form.catalog.trim(),
-        schema: form.schema.trim(),
-        user: form.user.trim(),
-        label: `${form.catalog || form.server}${form.schema ? `.${form.schema}` : ''}`,
+        server: resolvedServer,
+        catalog: resolvedCatalog,
+        schema: resolvedSchema,
+        user: resolvedUser,
+        label: `${resolvedCatalog || resolvedServer}${resolvedSchema ? ` / ${resolvedSchema}` : ''}`,
         connected: true,
         workspace: createEmptyWorkspace(),
       }
-      if (form.catalog && form.schema) {
+      if (resolvedCatalog && resolvedSchema) {
         newSession.workspace = { ...newSession.workspace, tablesLoading: true }
+      } else {
+        newSession.workspace = { ...newSession.workspace, metaLoading: true }
       }
-      setSessions((prev) => [...prev, newSession])
+      const nextSessions = [...sessionsRef.current, newSession]
+      sessionsRef.current = nextSessions
+      setSessions(nextSessions)
       setActiveSessionId(newSession.id)
       setShowConnectForm(false)
       setIsConnecting(false)
-      if (form.catalog && form.schema) {
+      if (resolvedCatalog && resolvedSchema) {
         queueMicrotask(() => void fetchTablesRef.current(newSession.id))
+      } else if (resolvedCatalog) {
+        queueMicrotask(() => void discoverSchemasRef.current(newSession.id, resolvedCatalog))
+      } else {
+        queueMicrotask(() => void discoverCatalogsRef.current(newSession.id))
       }
     } catch (err) {
       setIsConnecting(false)
@@ -308,15 +467,112 @@ export function TrinoWorkbenchView() {
 
   /* ── Fetch Tables ── */
 
+  const discoverCatalogs = useCallback(
+    async (sessionId: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+      patchSession(sessionId, { metaLoading: true, tablesError: null, catalogs: [], schemas: [] })
+      try {
+        const res = await window.api.trinoListCatalogs(session.connectionId)
+        if (!res.success) {
+          patchSession(sessionId, {
+            metaLoading: false,
+            tablesError: res.error ?? 'Failed to list catalogs — try SHOW CATALOGS in the editor.',
+          })
+          return
+        }
+        const catalogs = res.catalogs ?? []
+        patchSession(sessionId, { metaLoading: false, catalogs })
+        if (catalogs.length === 1) {
+          patchTrinoSession(sessionId, { catalog: catalogs[0] })
+          void discoverSchemasRef.current(sessionId, catalogs[0])
+        }
+      } catch (err) {
+        patchSession(sessionId, {
+          metaLoading: false,
+          tablesError: err instanceof Error ? err.message : String(err),
+        })
+      }
+    },
+    [patchSession, patchTrinoSession],
+  )
+
+  const discoverSchemas = useCallback(
+    async (sessionId: string, catalog: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+      patchSession(sessionId, { metaLoading: true, tablesError: null, schemas: [] })
+      try {
+        const res = await window.api.trinoListSchemas(session.connectionId, catalog)
+        if (!res.success) {
+          patchSession(sessionId, {
+            metaLoading: false,
+            tablesError: res.error ?? `Failed to list schemas in ${catalog}.`,
+          })
+          return
+        }
+        const schemas = res.schemas ?? []
+        patchSession(sessionId, { metaLoading: false, schemas })
+        if (schemas.length === 1) {
+          patchTrinoSession(sessionId, { schema: schemas[0] })
+          void fetchTablesRef.current(sessionId, true)
+        }
+      } catch (err) {
+        patchSession(sessionId, {
+          metaLoading: false,
+          tablesError: err instanceof Error ? err.message : String(err),
+        })
+      }
+    },
+    [patchSession, patchTrinoSession],
+  )
+
+  discoverCatalogsRef.current = discoverCatalogs
+  discoverSchemasRef.current = discoverSchemas
+
+  const selectCatalogForSession = useCallback(
+    (sessionId: string, catalog: string) => {
+      patchTrinoSession(sessionId, { catalog, schema: '' })
+      patchSession(sessionId, { schemas: [], tables: [], tablesError: null })
+      if (catalog) void discoverSchemas(sessionId, catalog)
+    },
+    [discoverSchemas, patchSession, patchTrinoSession],
+  )
+
+  const selectSchemaForSession = useCallback(
+    (sessionId: string, schema: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+      patchTrinoSession(sessionId, { schema })
+      saveLastConnection({
+        server: session.server,
+        catalog: session.catalog,
+        schema,
+        user: session.user,
+      })
+      patchSession(sessionId, { tables: [], tablesError: null })
+      if (!schema) return
+      const search = session.workspace.tableSearch.trim()
+      if (search) void searchTablesRef.current(sessionId, search)
+      else void fetchTablesRef.current(sessionId, true)
+    },
+    [patchSession, patchTrinoSession],
+  )
+
   const fetchTables = useCallback(
     async (sessionId: string, forceRefresh = false) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId)
       if (!session) return
+      if (session.workspace.tableSearch.trim()) {
+        void searchTablesRef.current(sessionId, session.workspace.tableSearch)
+        return
+      }
       if (!session.catalog || !session.schema) {
-        patchSession(sessionId, {
-          tablesLoading: false,
-          tablesError: 'No catalog/schema set on this connection.',
-        })
+        if (!session.catalog) {
+          void discoverCatalogs(sessionId)
+        } else {
+          void discoverSchemas(sessionId, session.catalog)
+        }
         return
       }
 
@@ -346,10 +602,119 @@ export function TrinoWorkbenchView() {
         })
       }
     },
-    [patchSession],
+    [patchSession, discoverCatalogs, discoverSchemas],
   )
 
+  const searchTablesForSession = useCallback(
+    async (sessionId: string, input: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+
+      const trimmed = input.trim()
+      if (!trimmed) {
+        patchSession(sessionId, { tables: [], tablesError: null })
+        if (session.catalog && session.schema) {
+          void fetchTablesRef.current(sessionId, true)
+        }
+        return
+      }
+
+      const parsed = parseTableNavigatorInput(trimmed)
+      let catalog = parsed.catalog ?? session.catalog
+      let schema = parsed.schema ?? session.schema
+      const filter = parsed.tableFilter
+
+      if (parsed.catalog && parsed.catalog !== session.catalog) {
+        patchTrinoSession(sessionId, { catalog: parsed.catalog, schema: parsed.schema ?? '' })
+        catalog = parsed.catalog
+        schema = parsed.schema ?? ''
+        void discoverSchemas(sessionId, parsed.catalog)
+      } else if (parsed.schema && parsed.schema !== session.schema) {
+        patchTrinoSession(sessionId, { schema: parsed.schema })
+        schema = parsed.schema
+      }
+
+      patchSession(sessionId, { tablesLoading: true, tablesError: null })
+
+      try {
+        const res = await Promise.race([
+          window.api.trinoListTables(
+            session.connectionId,
+            catalog || undefined,
+            schema || undefined,
+            filter,
+          ),
+          new Promise<{ success: false; tables: []; error: string }>((_, reject) => {
+            setTimeout(
+              () => reject(new Error(`Timed out after ${TABLES_FETCH_TIMEOUT_MS / 1000}s`)),
+              TABLES_FETCH_TIMEOUT_MS,
+            )
+          }),
+        ])
+        if (!res.success) {
+          patchSession(sessionId, { tablesLoading: false, tablesError: res.error ?? 'Table search failed' })
+          return
+        }
+        const tables = res.tables ?? []
+        if (tables.length === 1 && tables[0].catalog && tables[0].schema) {
+          patchTrinoSession(sessionId, { catalog: tables[0].catalog, schema: tables[0].schema })
+        }
+        patchSession(sessionId, { tables, tablesLoading: false, tablesError: null })
+      } catch (err) {
+        patchSession(sessionId, {
+          tablesLoading: false,
+          tablesError: err instanceof Error ? err.message : String(err),
+        })
+      }
+    },
+    [patchSession, patchTrinoSession, discoverSchemas],
+  )
+
+  searchTablesRef.current = searchTablesForSession
   fetchTablesRef.current = fetchTables
+
+  const scheduleTableSearch = useCallback((sessionId: string, value: string) => {
+    const existing = tableSearchTimersRef.current.get(sessionId)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      tableSearchTimersRef.current.delete(sessionId)
+      void searchTablesRef.current(sessionId, value)
+    }, TABLE_SEARCH_DEBOUNCE_MS)
+    tableSearchTimersRef.current.set(sessionId, timer)
+  }, [])
+
+  const handleTableSearchChange = useCallback(
+    (sessionId: string, value: string) => {
+      patchSession(sessionId, { tableSearch: value })
+      scheduleTableSearch(sessionId, value)
+    },
+    [patchSession, scheduleTableSearch],
+  )
+
+  const handleQueryChangeForSession = useCallback(
+    (sessionId: string, query: string) => {
+      patchSession(sessionId, { query })
+      const parsed = extractQualifiedTableFromSql(query)
+      if (!parsed?.tableFilter) return
+
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+
+      const parts = [parsed.catalog, parsed.schema, parsed.tableFilter].filter(Boolean)
+      const searchText = parts.join('.')
+      if (searchText === session.workspace.tableSearch) return
+
+      patchSession(sessionId, { tableSearch: searchText })
+      if (parsed.catalog && parsed.catalog !== session.catalog) {
+        patchTrinoSession(sessionId, { catalog: parsed.catalog, schema: parsed.schema ?? '' })
+        void discoverSchemas(sessionId, parsed.catalog)
+      } else if (parsed.schema && parsed.schema !== session.schema) {
+        patchTrinoSession(sessionId, { schema: parsed.schema })
+      }
+      scheduleTableSearch(sessionId, searchText)
+    },
+    [patchSession, patchTrinoSession, discoverSchemas, scheduleTableSearch],
+  )
 
   const selectSessionTab = useCallback((sessionId: string) => {
     startTransition(() => setActiveSessionId(sessionId))
@@ -360,12 +725,13 @@ export function TrinoWorkbenchView() {
   const fetchTableColumnsForSession = useCallback(
     async (sessionId: string, connectionId: string, tableName: string) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId)
+      const loc = session ? tableLocation(session, tableName) : { catalog: '', schema: '' }
       try {
         const res = await window.api.trinoDescribeTable(
           connectionId,
           tableName,
-          session?.catalog,
-          session?.schema,
+          loc.catalog || session?.catalog,
+          loc.schema || session?.schema,
         )
         if (!res.success) {
           const errMsg = res.error ?? 'Unknown error'
@@ -434,57 +800,41 @@ export function TrinoWorkbenchView() {
   const handleTableClickForSession = useCallback(
     (sessionId: string, tableName: string) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId)
-      if (session?.workspace.queryRunning) {
-        updateSessionWorkspace(sessionId, (w) => ({
-          messages: [...w.messages, 'A query is still running — Cancel or wait.'],
-          activeResultTab: 'messages',
-        }))
-        return
-      }
-      const qualified = session ? `${session.catalog}.${session.schema}.${tableName}` : tableName
+      const loc = session ? tableLocation(session, tableName) : { catalog: '', schema: '' }
+      const qualified =
+        loc.catalog && loc.schema ? `${loc.catalog}.${loc.schema}.${tableName}` : tableName
       const previewSql = `SELECT * FROM ${qualified} LIMIT ${TABLE_PREVIEW_LIMIT};`
       patchSession(sessionId, { query: previewSql, expandedTable: tableName })
-      if (session) void fetchTableColumnsForSession(sessionId, session.connectionId, tableName)
-      void runQueryRef.current(sessionId, previewSql)
     },
-    [patchSession, updateSessionWorkspace, fetchTableColumnsForSession],
+    [patchSession],
   )
 
   /* ── Run Query ── */
 
   const runQueryForSession = useCallback(
     async (sessionId: string, sqlOverride?: string) => {
-      let connectionId: string | null = null
-      let statement = ''
-      let skippedBecauseRunning = false
+      const session = sessionsRef.current.find((s) => s.id === sessionId)
+      if (!session) return
+      const statement = (sqlOverride ?? session.workspace.query).trim()
+      if (!statement) return
+
+      const connectionId = session.connectionId
       const runId = ++queryRunIdRef.current
-      setSessions((prev) => {
-        const session = prev.find((s) => s.id === sessionId)
-        if (!session) return prev
-        connectionId = session.connectionId
-        statement = (sqlOverride ?? session.workspace.query).trim()
-        if (!statement || session.workspace.queryRunning) {
-          if (statement && session.workspace.queryRunning) skippedBecauseRunning = true
-          connectionId = null
-          return prev
-        }
-        return prev.map((s) =>
+
+      if (session.workspace.queryRunning) {
+        void window.api.trinoCancelQuery(connectionId).catch(() => undefined)
+      }
+
+      setSessions((prev) =>
+        prev.map((s) =>
           s.id === sessionId
             ? { ...s, workspace: { ...s.workspace, queryRunning: true, result: null, activeResultTab: 'results' } }
             : s,
-        )
-      })
-      if (!connectionId || !statement) {
-        if (skippedBecauseRunning) {
-          updateSessionWorkspace(sessionId, (w) => ({
-            messages: [...w.messages, 'A query is still running — Cancel or wait.'],
-            activeResultTab: 'messages',
-          }))
-        }
-        return
-      }
+        ),
+      )
 
       startQueryElapsedTimer()
+      queryIpcInFlightRef.current = true
       try {
         const res = await Promise.race([
           window.api.trinoExecuteQuery(connectionId, statement),
@@ -506,7 +856,14 @@ export function TrinoWorkbenchView() {
           }))
         } else {
           const notes: string[] = []
-          if (res.truncated) notes.push('Showing first 10,000 rows (more may exist — add a narrower WHERE or LIMIT).')
+          if (res.rowCapApplied) {
+            notes.push(
+              'Auto-added LIMIT 1001 (query had no LIMIT — Trino stops early instead of scanning the full table).',
+            )
+          }
+          if (res.truncated) {
+            notes.push('Showing first 1,000 rows (more may exist — add a narrower WHERE or LIMIT).')
+          }
           updateSessionWorkspace(sessionId, (w) => ({
             queryRunning: false,
             result: res,
@@ -524,7 +881,8 @@ export function TrinoWorkbenchView() {
           activeResultTab: 'messages',
         }))
       } finally {
-        if (runId !== queryRunIdRef.current) {
+        queryIpcInFlightRef.current = false
+        if (runId === queryRunIdRef.current) {
           updateSessionWorkspace(sessionId, (w) => (w.queryRunning ? { queryRunning: false } : {}))
         }
       }
@@ -633,8 +991,12 @@ export function TrinoWorkbenchView() {
               list="trino-server-presets"
               value={form.server}
               onChange={(e) => setForm((f) => ({ ...f, server: e.target.value }))}
-              placeholder="https://trino.wixprod.net:443"
+              placeholder="https://presto-router.wixpress.com:443"
             />
+            <span className="dbw-picker-hint" style={{ display: 'block', marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+              HTTPS REST URL (DataGrip JDBC URLs like jdbc:trino://… are converted automatically).
+              Catalog/schema are optional — leave empty to connect like DataGrip, then run SQL.
+            </span>
             <datalist id="trino-server-presets">
               {presets.map((p) => (
                 <option key={p.server} value={p.server}>
@@ -650,7 +1012,7 @@ export function TrinoWorkbenchView() {
               className="form-input"
               value={form.catalog}
               onChange={(e) => setForm((f) => ({ ...f, catalog: e.target.value }))}
-              placeholder="e.g. hive"
+              placeholder="optional — e.g. hive"
             />
           </label>
 
@@ -660,7 +1022,7 @@ export function TrinoWorkbenchView() {
               className="form-input"
               value={form.schema}
               onChange={(e) => setForm((f) => ({ ...f, schema: e.target.value }))}
-              placeholder="e.g. default"
+              placeholder="optional — e.g. default"
             />
           </label>
 
@@ -854,7 +1216,7 @@ export function TrinoWorkbenchView() {
             <DbSessionWorkspacePanel
               key={s.id}
               sessionId={s.id}
-              dbName={s.catalog ? `${s.catalog}.${s.schema}` : s.server}
+              dbName={s.catalog && s.schema ? `${s.catalog} / ${s.schema}` : s.server}
               workspace={s.workspace}
               tunnelAlive={s.connected}
               isActive={s.id === activeSessionId}
@@ -864,13 +1226,31 @@ export function TrinoWorkbenchView() {
               cmExtensions={cmExtensions}
               formatMs={formatMs}
               renderCellValue={renderCellValue}
-              onQueryChange={(query) => patchSession(s.id, { query })}
+              onQueryChange={(query) => handleQueryChangeForSession(s.id, query)}
               onRunQuery={(sqlOverride) => void runQueryForSession(s.id, sqlOverride)}
               onCancelQuery={() => void cancelQueryForSession(s.id)}
               onFetchTables={() => void fetchTables(s.id, true)}
+              tableSearch={{
+                value: s.workspace.tableSearch,
+                onChange: (value) => handleTableSearchChange(s.id, value),
+              }}
+              catalogBrowse={{
+                catalogs: s.workspace.catalogs,
+                schemas: s.workspace.schemas,
+                catalog: s.catalog,
+                schema: s.schema,
+                loading: s.workspace.metaLoading,
+                onCatalogChange: (catalog) => selectCatalogForSession(s.id, catalog),
+                onSchemaChange: (schema) => selectSchemaForSession(s.id, schema),
+              }}
               onToggleTable={(tableName) => void toggleTableForSession(s.id, tableName)}
               onRetryColumns={(tableName) => retryColumnsForSession(s.id, tableName)}
               onTableClick={(tableName) => handleTableClickForSession(s.id, tableName)}
+              formatTableDisplayName={(t) => {
+                const cat = t.catalog || s.catalog
+                const sch = t.schema || s.schema
+                return cat && sch ? `${cat}.${sch}.${t.name}` : t.name
+              }}
               onActiveResultTab={(tab) => patchSession(s.id, { activeResultTab: tab })}
               onClearMessages={() => patchSession(s.id, { messages: [] })}
             />

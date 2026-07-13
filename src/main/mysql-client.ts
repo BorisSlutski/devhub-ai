@@ -161,7 +161,11 @@ async function queryWithTimeout(
     ])) as [unknown, unknown]
   } catch (err) {
     if (timedOut) {
-      await killServerQuery(killConn, connection)
+      // Never await KILL — a stuck sibling socket can block the handler forever.
+      void Promise.race([
+        killServerQuery(killConn, connection),
+        new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+      ])
       onTimeout?.()
       try {
         connection.destroy()
@@ -478,6 +482,13 @@ class MysqlClient {
       return { ...empty, error: `No connection found for id "${id}"` }
     }
 
+    if (entry.queryInFlight) {
+      return {
+        ...empty,
+        error: 'A query is already running on this connection — wait or click Cancel.',
+      }
+    }
+
     const start = performance.now()
     const generationAtStart = entry.generation
     let pingMs = 0
@@ -630,6 +641,10 @@ class MysqlClient {
         ...empty,
         executionTimeMs,
         error: msg,
+      }
+    } finally {
+      if (entry.generation === generationAtStart) {
+        entry.queryInFlight = false
       }
     }
   }
