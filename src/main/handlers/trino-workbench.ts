@@ -1,5 +1,11 @@
 import { ipcMain } from 'electron'
 import { trinoClient } from '../trino-client'
+import {
+  saveTrinoCredential,
+  getTrinoCredential,
+  deleteTrinoCredential,
+  hasTrinoCredential,
+} from '../trino-credentials-store'
 
 export interface TrinoProfile {
   id: string
@@ -21,6 +27,14 @@ export function registerTrinoWorkbenchHandlers() {
     return { success: true, presets: TRINO_SERVER_PRESETS }
   })
 
+  ipcMain.handle('trino-has-saved-credential', async (_event, server: string, user: string) => {
+    try {
+      return { success: true, hasCredential: hasTrinoCredential(server, user) }
+    } catch (err: any) {
+      return { success: false, hasCredential: false, error: err.message }
+    }
+  })
+
   ipcMain.handle(
     'trino-connect',
     async (
@@ -31,10 +45,44 @@ export function registerTrinoWorkbenchHandlers() {
       schema: string,
       user: string,
       password: string,
+      savePassword?: boolean,
     ) => {
       try {
+        const resolvedPassword = password || getTrinoCredential(server, user) || ''
+        if (!resolvedPassword) {
+          return { success: false, error: 'Password is required' }
+        }
+
         console.log(`[trino-workbench] connecting id=${connectionId} server=${server}`)
-        const conn = await trinoClient.connect(connectionId, server, catalog, schema, user, password)
+        const conn = await trinoClient.connect(
+          connectionId,
+          server,
+          catalog,
+          schema,
+          user,
+          resolvedPassword,
+        )
+
+        if (savePassword) {
+          if (password) {
+            try {
+              saveTrinoCredential(server, user, password)
+            } catch (saveErr: any) {
+              return {
+                success: true,
+                connectionId: conn.id,
+                credentialWarning: saveErr?.message ?? 'Failed to save password',
+              }
+            }
+          }
+        } else {
+          try {
+            deleteTrinoCredential(server, user)
+          } catch {
+            // non-fatal — connection already succeeded
+          }
+        }
+
         return { success: true, connectionId: conn.id }
       } catch (err: any) {
         console.error('[trino-workbench] connect error:', err.message)

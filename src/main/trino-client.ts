@@ -8,6 +8,7 @@
  */
 
 import { Trino, BasicAuth } from 'trino-client'
+import { normalizeWixUser } from './trino-user'
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -72,12 +73,6 @@ interface ConnectionEntry {
 function previewSql(sql: string, max = 120): string {
   const oneLine = sql.replace(/\s+/g, ' ').trim()
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}…`
-}
-
-/** Wix's Trino/LDAP identity requires the full `user@wix.com` form — bare usernames are rejected. */
-function normalizeWixUser(user: string): string {
-  const trimmed = user.trim()
-  return trimmed && !trimmed.includes('@') ? `${trimmed}@wix.com` : trimmed
 }
 
 /** Quote a Trino identifier segment (catalog/schema/table) — doubles embedded quotes. */
@@ -189,13 +184,27 @@ class TrinoClientManager {
         }
         const remaining = deadline - Date.now()
         if (remaining <= 0) {
+          await cancelInFlightQuery(entry)
           throw new Error(`Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`)
         }
-        const { value: page, done } = await withTimeout(
-          iter.next(),
-          remaining,
-          `Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`,
-        )
+        let pageResult: IteratorResult<unknown>
+        try {
+          pageResult = await withTimeout(
+            iter.next(),
+            remaining,
+            `Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`,
+          )
+        } catch (timeoutErr) {
+          await cancelInFlightQuery(entry)
+          throw timeoutErr
+        }
+        const page = pageResult.value as {
+          id?: string
+          error?: { message: string }
+          columns?: { name: string; type: string }[]
+          data?: unknown[][]
+        }
+        const { done } = pageResult
         if (done) break
         if (page.id) {
           entry.currentQueryId = page.id
@@ -243,6 +252,10 @@ class TrinoClientManager {
     } catch (err: any) {
       const executionTimeMs = Math.round((performance.now() - start) * 100) / 100
       const msg = err?.message ?? String(err)
+      const timedOut = msg.includes('timed out')
+      if (timedOut) {
+        await cancelInFlightQuery(entry)
+      }
       console.error(
         `[trino-client] query failed id=${id} total=${executionTimeMs}ms sql=${previewSql(sql)} err=${msg}`,
       )
@@ -338,6 +351,20 @@ class TrinoClientManager {
 
   disconnectAll(): void {
     for (const id of Array.from(this.connections.keys())) this.disconnect(id)
+  }
+}
+
+async function cancelInFlightQuery(entry: ConnectionEntry): Promise<void> {
+  entry.generation += 1
+  const queryId = entry.currentQueryId
+  if (queryId) {
+    try {
+      await entry.client.cancel(queryId)
+    } catch {
+      // best effort
+    }
+  } else {
+    entry.cancelRequested = true
   }
 }
 

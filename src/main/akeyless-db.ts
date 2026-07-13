@@ -1,5 +1,6 @@
 import { execFile, spawn, ChildProcess } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { createServer } from 'net'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { BrowserWindow } from 'electron'
@@ -461,10 +462,30 @@ async function listProducersForRoot(rootPath: string, dbType: 'mysql' | 'mongo')
   return results
 }
 
+/** True if nothing is bound to `port` at the OS level right now (probes with a real bind). */
+function isPortFreeOnHost(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createServer()
+    probe.once('error', () => resolve(false))
+    probe.once('listening', () => {
+      probe.close(() => resolve(true))
+    })
+    probe.listen(port, '127.0.0.1')
+  })
+}
+
 /**
- * Picks the next free local port in [min, max], avoiding ports used by active tunnels.
+ * Picks the next free local port in [min, max], avoiding ports used by active tunnels
+ * in this process AND ports already bound at the OS level — our own bookkeeping can drift
+ * from reality (a second app instance, a leaked tunnel process from a crash, a force-restart
+ * racing the exit handler), and handing out an already-bound port silently corrupts the new
+ * SSH forward (MySQL then talks through someone else's tunnel, or the connection just resets).
  */
-function allocatePort(min: number = PORT_RANGE_MIN, max: number = PORT_RANGE_MAX): number {
+async function allocatePort(
+  min: number = PORT_RANGE_MIN,
+  max: number = PORT_RANGE_MAX,
+  skip: Set<number> = new Set(),
+): Promise<number> {
   const used = new Set<number>()
   for (const tunnel of activeTunnels.values()) {
     used.add(tunnel.localPort)
@@ -472,12 +493,39 @@ function allocatePort(min: number = PORT_RANGE_MIN, max: number = PORT_RANGE_MAX
   for (const tunnel of closingTunnels) {
     used.add(tunnel.localPort)
   }
+  for (const port of skip) {
+    used.add(port)
+  }
   for (let port = min; port <= max; port++) {
-    if (!used.has(port)) return port
+    if (used.has(port)) continue
+    if (await isPortFreeOnHost(port)) return port
   }
   throw new Error(
     `No free local ports for database tunnel (${min}-${max}). Close other connections.`,
   )
+}
+
+const PORT_BIND_ERROR_RE = /address already in use|eaddrinuse/i
+const MAX_TUNNEL_PORT_ATTEMPTS = 5
+const TUNNEL_BIND_PROBE_MS = 250
+
+function waitForTunnelBindFailure(child: ChildProcess, timeoutMs = TUNNEL_BIND_PROBE_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (failed: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.stderr?.off('data', onData)
+      resolve(failed)
+    }
+    const onData = (buf: Buffer) => {
+      if (PORT_BIND_ERROR_RE.test(buf.toString())) finish(true)
+    }
+    child.stderr?.on('data', onData)
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    child.once('exit', () => finish(false))
+  })
 }
 
 /**
@@ -677,8 +725,40 @@ export async function openTunnel(producerName: string, preferredId?: string): Pr
     getCredentials(producerName),
   ])
 
-  const localPort = allocatePort()
   const tunnelId = preferredId ?? generateTunnelId()
+  const bindFailures = new Set<number>()
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt < MAX_TUNNEL_PORT_ATTEMPTS; attempt++) {
+    const localPort = await allocatePort(PORT_RANGE_MIN, PORT_RANGE_MAX, bindFailures)
+    try {
+      return await spawnTunnel(
+        producerName,
+        tunnelId,
+        details,
+        credentials,
+        localPort,
+      )
+    } catch (err: any) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+      if (lastError.message.includes('local port bind failed')) {
+        bindFailures.add(localPort)
+        continue
+      }
+      throw lastError
+    }
+  }
+
+  throw lastError ?? new Error('Failed to open SSH tunnel after multiple port attempts')
+}
+
+async function spawnTunnel(
+  producerName: string,
+  tunnelId: string,
+  details: { host: string; dbName: string },
+  credentials: DbCredentials,
+  localPort: number,
+): Promise<TunnelInfo> {
   const { kgb, producer } = parseProducerPath(producerName)
   const dbType = typeFromPath(producerName)
   const bin = findAkeylessBinary()
@@ -714,6 +794,16 @@ export async function openTunnel(producerName: string, preferredId?: string): Pr
   child.stderr?.on('data', (buf: Buffer) => {
     appendTunnelLog(tunnelId, buf.toString())
   })
+
+  const bindFailed = await waitForTunnelBindFailure(child)
+  if (bindFailed) {
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      // ignore
+    }
+    throw new Error(`local port bind failed on ${localPort}`)
+  }
 
   const tunnelInfo: TunnelInfo = {
     id: tunnelId,

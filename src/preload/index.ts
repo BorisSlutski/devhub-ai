@@ -439,8 +439,14 @@ const api = {
     schema: string,
     user: string,
     password: string,
-  ): Promise<{ success: boolean; connectionId?: string; error?: string }> =>
-    ipcRenderer.invoke('trino-connect', connectionId, server, catalog, schema, user, password),
+    savePassword?: boolean,
+  ): Promise<{ success: boolean; connectionId?: string; error?: string; credentialWarning?: string }> =>
+    ipcRenderer.invoke('trino-connect', connectionId, server, catalog, schema, user, password, savePassword),
+  trinoHasSavedCredential: (
+    server: string,
+    user: string,
+  ): Promise<{ success: boolean; hasCredential: boolean; error?: string }> =>
+    ipcRenderer.invoke('trino-has-saved-credential', server, user),
   trinoDisconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('trino-disconnect', connectionId),
   trinoListConnections: (): Promise<{

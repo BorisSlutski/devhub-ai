@@ -102,9 +102,17 @@ interface ConnectFormState {
   schema: string
   user: string
   password: string
+  savePassword: boolean
 }
 
-const EMPTY_FORM: ConnectFormState = { server: '', catalog: '', schema: '', user: '', password: '' }
+const EMPTY_FORM: ConnectFormState = {
+  server: '',
+  catalog: '',
+  schema: '',
+  user: '',
+  password: '',
+  savePassword: false,
+}
 const LAST_CONNECTION_STORAGE_KEY = 'devhub-ai-trino-last-connection'
 
 function loadLastConnection(): Pick<ConnectFormState, 'server' | 'catalog' | 'schema' | 'user'> | null {
@@ -202,8 +210,20 @@ export function TrinoWorkbenchView() {
     setConnectError(null)
     const last = loadLastConnection()
     const base = presets.length > 0 ? { ...EMPTY_FORM, server: presets[0].server } : EMPTY_FORM
-    setForm(last ? { ...base, ...last, password: '' } : base)
+    const next = last ? { ...base, ...last, password: '', savePassword: false } : base
+    setForm(next)
     setShowConnectForm(true)
+    if (next.server && next.user) {
+      const lookupServer = next.server
+      const lookupUser = next.user
+      void window.api.trinoHasSavedCredential(lookupServer, lookupUser).then((res) => {
+        if (!res.success || !res.hasCredential) return
+        setForm((f) => {
+          if (f.server !== lookupServer || f.user !== lookupUser) return f
+          return { ...f, savePassword: true }
+        })
+      })
+    }
   }, [presets])
 
   const handleConnect = useCallback(async () => {
@@ -222,11 +242,15 @@ export function TrinoWorkbenchView() {
         form.schema.trim(),
         form.user.trim(),
         form.password,
+        form.savePassword,
       )
       if (!res.success) {
         setConnectError(res.error ?? 'Connection failed')
         setIsConnecting(false)
         return
+      }
+      if (res.credentialWarning) {
+        setConnectError(`Connected, but failed to save password: ${res.credentialWarning}`)
       }
       saveLastConnection({
         server: form.server.trim(),
@@ -645,6 +669,18 @@ export function TrinoWorkbenchView() {
               value={form.password}
               onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
             />
+          </label>
+
+          <label
+            className="dbw-picker-filter"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}
+          >
+            <input
+              type="checkbox"
+              checked={form.savePassword}
+              onChange={(e) => setForm((f) => ({ ...f, savePassword: e.target.checked }))}
+            />
+            <span>Save password (encrypted, this machine only)</span>
           </label>
 
           <div className="modal-actions">
