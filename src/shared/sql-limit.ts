@@ -11,5 +11,9 @@ export function capUnboundedSelect(
   if (/;\s*\S/.test(body)) return { sql, rowCapApplied: false }
   if (!/^\s*(select|with)\b/i.test(body)) return { sql, rowCapApplied: false }
   if (/\blimit\s+(\d+|\?)/i.test(body)) return { sql, rowCapApplied: false }
+  // Trivial probes (SELECT 1, SELECT 1, 2) — no table scan to cap.
+  if (/^\s*select\s+[\d,'"\s.]+\s*$/i.test(body) && !/\bfrom\b/i.test(body)) {
+    return { sql, rowCapApplied: false }
+  }
   return { sql: `${body} LIMIT ${maxRows + 1}`, rowCapApplied: true }
 }

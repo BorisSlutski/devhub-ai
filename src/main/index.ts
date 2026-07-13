@@ -220,7 +220,9 @@ app.on('before-quit', () => {
   try {
     const { mysqlClient } = require('./mysql-client')
     const { akeylessDb } = require('./akeyless-db')
+    const { trinoClient } = require('./trino-client')
     mysqlClient.disconnectAll().catch(() => {})
     akeylessDb.closeAllTunnels()
+    trinoClient.disconnectAll()
   } catch { /* modules may not be loaded yet */ }
 })

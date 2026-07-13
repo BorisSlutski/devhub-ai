@@ -92,7 +92,11 @@ function quoteIdent(name: string): string {
 }
 
 function escapeSqlLike(value: string): string {
-  return value.replace(/'/g, "''")
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "''").replace(/%/g, '\\%').replace(/_/g, '\\_')
+}
+
+function sqlLikePattern(value: string): string {
+  return `'%${escapeSqlLike(value)}%' ESCAPE '\\'`
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +359,7 @@ class TrinoClientManager {
     if (!cat || !sch) throw new Error('No catalog/schema selected on this connection')
     const filter = nameFilter?.trim()
     const sql = filter
-      ? `SHOW TABLES FROM ${quoteIdent(cat)}.${quoteIdent(sch)} LIKE '%${escapeSqlLike(filter)}%'`
+      ? `SHOW TABLES FROM ${quoteIdent(cat)}.${quoteIdent(sch)} LIKE ${sqlLikePattern(filter)}`
       : `SHOW TABLES FROM ${quoteIdent(cat)}.${quoteIdent(sch)}`
     const res = await this.executeQuery(id, sql)
     if (res.error) throw new Error(res.error)
@@ -381,19 +385,36 @@ class TrinoClientManager {
     }
     if (!filter) return []
 
-    const sql = `SELECT table_cat, table_schem, table_name
+    const entry = this.connections.get(id)
+    const globalSql = `SELECT table_cat, table_schem, table_name
 FROM system.jdbc.tables
 WHERE table_type = 'TABLE'
-  AND LOWER(table_name) LIKE LOWER('%${escapeSqlLike(filter)}%')
+  AND LOWER(table_name) LIKE LOWER(${sqlLikePattern(filter)})
 ORDER BY table_cat, table_schem, table_name
 LIMIT 100`
-    const res = await this.executeQuery(id, sql)
-    if (res.error) throw new Error(res.error)
-    return res.rows.map((r) => ({
-      catalog: String(r[0]),
-      schema: String(r[1]),
-      name: String(r[2]),
-    }))
+    const res = await this.executeQuery(id, globalSql)
+    if (!res.error) {
+      return res.rows.map((r) => ({
+        catalog: String(r[0]),
+        schema: String(r[1]),
+        name: String(r[2]),
+      }))
+    }
+
+    const fallbackCatalog = catalog ?? entry?.meta.catalog
+    const fallbackSchema = schema ?? entry?.meta.schema
+    if (fallbackCatalog && fallbackSchema) {
+      const names = await this.listTables(id, fallbackCatalog, fallbackSchema, filter)
+      return names.map((name) => ({
+        catalog: fallbackCatalog,
+        schema: fallbackSchema,
+        name,
+      }))
+    }
+
+    throw new Error(
+      `Global table search failed (${res.error}). Try catalog.schema.table_name in the search box.`,
+    )
   }
 
   /** DESCRIBE catalog.schema.table — returns Column/Type/Extra/Comment. */

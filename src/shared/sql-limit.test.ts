@@ -18,4 +18,10 @@ describe('capUnboundedSelect', () => {
     const { rowCapApplied } = capUnboundedSelect('INSERT INTO t VALUES (1)', 10_000)
     expect(rowCapApplied).toBe(false)
   })
+
+  it('does not cap trivial SELECT probes', () => {
+    const { sql, rowCapApplied } = capUnboundedSelect('SELECT 1', 1_000)
+    expect(rowCapApplied).toBe(false)
+    expect(sql).toBe('SELECT 1')
+  })
 })
