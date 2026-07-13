@@ -300,10 +300,10 @@ function DbSessionWorkspacePanelInner({
                     Running
                     {queryElapsedSec > 0 ? ` (${queryElapsedSec}s)` : '…'}
                   </span>
-                  {queryElapsedSec >= 8 && (
+                  {queryElapsedSec >= 30 && (
                     <span className="dbw-results-loading-hint">
-                      Still waiting on the SSH tunnel — use Cancel above, or try fewer columns / a
-                      smaller LIMIT.
+                      Long-running query over SSH — use Cancel above, or try a narrower WHERE /
+                      smaller LIMIT. Large scans can take up to 90s.
                     </span>
                   )}
                 </div>

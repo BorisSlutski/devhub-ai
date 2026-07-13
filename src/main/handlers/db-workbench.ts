@@ -2,6 +2,7 @@ import { createConnection } from 'net'
 import { ipcMain } from 'electron'
 import { akeylessDb } from '../akeyless-db'
 import { mysqlClient } from '../mysql-client'
+import { isLocalPortReachable, isLikelyTunnelFailure } from '../tunnel-probe'
 import {
   registerDbConnection,
   touchDbConnection,
@@ -58,6 +59,22 @@ async function ensureDbConnection(connectionId: string): Promise<string | null> 
     registerDbConnection(connectionId)
   }
 
+  const reopenTunnelAndReconnect = async (): Promise<string | null> => {
+    const reopened = await akeylessDb.reopenTunnel(connectionId)
+    await waitForLocalPort(reopened.localPort)
+    const nextTunnel = akeylessDb.getTunnel(connectionId)
+    if (!nextTunnel) {
+      return 'SSH tunnel failed to reopen. Try Reconnect or connect again.'
+    }
+    await reconnect(
+      nextTunnel.credentials.user,
+      nextTunnel.credentials.password,
+      nextTunnel.localPort,
+      nextTunnel.dbName,
+    )
+    return null
+  }
+
   // Dead SSH forward with a live process is common after sleep/wake — skip MySQL reconnect
   // attempts on an unreachable local port and reopen the tunnel immediately (DevDock parity).
   if (!(await isLocalPortReachable(tunnel.localPort))) {
@@ -65,14 +82,7 @@ async function ensureDbConnection(connectionId: string): Promise<string | null> 
       console.log(
         `[db-workbench] tunnel port ${tunnel.localPort} unreachable for ${connectionId}, reopening SSH…`,
       )
-      const reopened = await akeylessDb.reopenTunnel(connectionId)
-      await waitForLocalPort(reopened.localPort)
-      tunnel = akeylessDb.getTunnel(connectionId)
-      if (!tunnel) {
-        return 'SSH tunnel failed to reopen. Try Reconnect or connect again.'
-      }
-      await reconnect(tunnel.credentials.user, tunnel.credentials.password, tunnel.localPort, tunnel.dbName)
-      return null
+      return await reopenTunnelAndReconnect()
     } catch (err: any) {
       return err?.message ?? String(err)
     }
@@ -81,31 +91,38 @@ async function ensureDbConnection(connectionId: string): Promise<string | null> 
   try {
     await reconnect(tunnel.credentials.user, tunnel.credentials.password, tunnel.localPort, tunnel.dbName)
     return null
-  } catch {
+  } catch (firstErr) {
+    if (isLikelyTunnelFailure(firstErr)) {
+      try {
+        console.log(
+          `[db-workbench] mysql reconnect looks like tunnel failure for ${connectionId}, reopening SSH…`,
+        )
+        return await reopenTunnelAndReconnect()
+      } catch (err: any) {
+        return err?.message ?? String(err)
+      }
+    }
     try {
       const credentials = await akeylessDb.getCredentials(tunnel.producerName)
       tunnel.credentials = credentials
       await reconnect(credentials.user, credentials.password, tunnel.localPort, tunnel.dbName)
       return null
-    } catch {
-      // Both attempts failed on the existing local port. The SSH tunnel *process*
-      // can still be alive (so we never took the "tunnel missing" branch above)
-      // while the forward itself is silently stuck — e.g. after sleep/wake or a
-      // bastion-side drop the local client doesn't notice. Reconnecting MySQL to
-      // the same dead port just repeats the same hang on every query. Force a
-      // full tunnel restart on a fresh port as a last resort before giving up.
+    } catch (secondErr) {
+      if (isLikelyTunnelFailure(secondErr)) {
+        try {
+          console.log(
+            `[db-workbench] credential refresh still failing for ${connectionId}, forcing SSH tunnel restart…`,
+          )
+          return await reopenTunnelAndReconnect()
+        } catch (err: any) {
+          return err?.message ?? String(err)
+        }
+      }
       try {
         console.log(
           `[db-workbench] mysql reconnect failed twice for ${connectionId}, forcing SSH tunnel restart…`,
         )
-        const reopened = await akeylessDb.reopenTunnel(connectionId)
-        await waitForLocalPort(reopened.localPort)
-        tunnel = akeylessDb.getTunnel(connectionId)
-        if (!tunnel) {
-          return 'SSH tunnel failed to reopen. Try Reconnect or connect again.'
-        }
-        await reconnect(tunnel.credentials.user, tunnel.credentials.password, tunnel.localPort, tunnel.dbName)
-        return null
+        return await reopenTunnelAndReconnect()
       } catch (err: any) {
         return err?.message ?? String(err)
       }
@@ -123,29 +140,6 @@ async function ensureDbConnectionWithTimeout(connectionId: string): Promise<stri
   } catch (err: any) {
     return err?.message ?? String(err)
   }
-}
-
-/** Quick TCP probe — faster than a full MySQL reconnect on a dead SSH forward. */
-function isLocalPortReachable(port: number, timeoutMs = 2_000): Promise<boolean> {
-  const started = Date.now()
-  return new Promise((resolve) => {
-    const probe = () => {
-      const sock = createConnection({ host: '127.0.0.1', port }, () => {
-        sock.destroy()
-        resolve(true)
-      })
-      sock.on('error', () => {
-        sock.destroy()
-        if (Date.now() - started >= timeoutMs) {
-          resolve(false)
-          return
-        }
-        setTimeout(probe, 200)
-      })
-    }
-    probe()
-    setTimeout(() => resolve(false), timeoutMs)
-  })
 }
 
 /** Wait until the SSH local forward accepts TCP (replaces fixed 8s sleep). */

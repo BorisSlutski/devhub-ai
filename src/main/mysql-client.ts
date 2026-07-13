@@ -7,6 +7,7 @@
  */
 
 import { coalesceInflight } from './describe-inflight-coalesce'
+import { killServerQuery } from './mysql-kill-query'
 import { capUnboundedSelect } from '../shared/sql-limit'
 import {
   buildTunnelOptimizedStarSelect,
@@ -171,17 +172,6 @@ async function queryWithTimeout(
     throw err
   } finally {
     if (timer) clearTimeout(timer)
-  }
-}
-
-/** Stop a timed-out query on the server (PyCharm/JDBC-style) using the sibling socket. */
-async function killServerQuery(killConn: any, victimConn: any): Promise<void> {
-  const threadId = victimConn?.threadId
-  if (!killConn || typeof threadId !== 'number') return
-  try {
-    await killConn.query(`KILL QUERY ${threadId}`)
-  } catch {
-    // best effort — tunnel may already be dead
   }
 }
 
