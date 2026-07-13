@@ -126,7 +126,7 @@ export function registerTrinoWorkbenchHandlers() {
 
   ipcMain.handle('trino-disconnect', async (_event, connectionId: string) => {
     try {
-      trinoClient.disconnect(connectionId)
+      await trinoClient.disconnect(connectionId)
       return { success: true }
     } catch (err: any) {
       return { success: false, error: err.message }

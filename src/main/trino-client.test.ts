@@ -50,7 +50,7 @@ describe('trino-client executeQuery timeout', () => {
     vi.resetModules()
     const { trinoClient } = await import('./trino-client')
     for (const conn of trinoClient.getConnections()) {
-      trinoClient.disconnect(conn.id)
+      await trinoClient.disconnect(conn.id)
     }
   })
 
@@ -148,5 +148,22 @@ describe('trino-client executeQuery timeout', () => {
     expect(capturedQuery).toMatch(/LIMIT 1001\s*$/i)
     expect(result.rowCapApplied).toBe(true)
     expect(result.error).toBeUndefined()
+  })
+
+  it('cancels in-flight query on disconnect', async () => {
+    mockQuery
+      .mockImplementationOnce(async () => okConnectIter())
+      .mockImplementation(async () => hangingQueryIter('q-disconnect'))
+
+    const { trinoClient } = await import('./trino-client')
+    await trinoClient.connect('conn-4', 'https://trino.wixprod.net:443', 'hive', 'default', 'boris', 'secret')
+
+    void trinoClient.executeQuery('conn-4', 'SELECT slow')
+    await vi.advanceTimersByTimeAsync(0)
+
+    await trinoClient.disconnect('conn-4')
+
+    expect(mockCancel).toHaveBeenCalledWith('q-disconnect')
+    expect(trinoClient.hasConnection('conn-4')).toBe(false)
   })
 })

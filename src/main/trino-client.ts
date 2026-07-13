@@ -119,7 +119,7 @@ class TrinoClientManager {
     password: string,
   ): Promise<TrinoConnection> {
     if (this.connections.has(id)) {
-      this.disconnect(id)
+      await this.disconnect(id)
     }
 
     const normalizedUser = normalizeWixUser(user)
@@ -156,7 +156,10 @@ class TrinoClientManager {
     return { ...meta }
   }
 
-  disconnect(id: string): void {
+  async disconnect(id: string): Promise<void> {
+    const entry = this.connections.get(id)
+    if (!entry) return
+    await cancelInFlightQuery(entry)
     this.connections.delete(id)
   }
 
@@ -444,8 +447,9 @@ LIMIT 100`
     return Array.from(this.connections.values()).map((e) => ({ ...e.meta }))
   }
 
-  disconnectAll(): void {
-    for (const id of Array.from(this.connections.keys())) this.disconnect(id)
+  async disconnectAll(): Promise<void> {
+    const ids = Array.from(this.connections.keys())
+    await Promise.allSettled(ids.map((id) => this.disconnect(id)))
   }
 }
 
