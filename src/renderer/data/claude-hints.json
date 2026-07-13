@@ -1,0 +1,34 @@
+[
+  {
+    "category": "Session",
+    "items": [
+      { "title": "Resume session", "command": "/resume", "description": "Continue a previous Claude Code session" },
+      { "title": "Clear conversation", "command": "/clear", "description": "Start fresh in the current session" },
+      { "title": "Compact context", "command": "/compact", "description": "Summarize and free context window space" }
+    ]
+  },
+  {
+    "category": "Project",
+    "items": [
+      { "title": "Init project memory", "command": "/init", "description": "Analyze codebase and create CLAUDE.md guidance" },
+      { "title": "Review changes", "command": "Review my git diff and suggest improvements", "description": "Ask Claude to review uncommitted work" }
+    ]
+  },
+  {
+    "category": "DevHub-AI",
+    "items": [
+      { "title": "Toggle grid view", "command": "Ctrl+G", "description": "Show multiple Claude sessions at once (up to 8)" },
+      { "title": "Command palette", "command": "Cmd+Shift+P", "description": "Jump to sessions, panels, and actions" },
+      { "title": "Browser CLI", "command": "browser navigate http://localhost:3000", "description": "Control the in-app browser from the terminal" },
+      { "title": "Hints panel", "command": "F1", "description": "Open this reference" }
+    ]
+  },
+  {
+    "category": "Keyboard",
+    "items": [
+      { "title": "Find in terminal", "command": "Cmd+F", "description": "Search scrollback in the focused terminal" },
+      { "title": "New session", "command": "Cmd+Shift+N", "description": "Create a new Claude session" },
+      { "title": "Split pane", "command": "Cmd+D", "description": "Split the current session terminal horizontally" }
+    ]
+  }
+]

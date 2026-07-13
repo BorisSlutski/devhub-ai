@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ClaudeSessionsView } from './ClaudeSessionsView'
 
 vi.mock('./XTerminal', () => ({
@@ -22,6 +22,26 @@ vi.mock('./SessionInfoBar', () => ({
 vi.mock('./presets', () => ({
   PresetBar: () => <div data-testid="preset-bar" />,
   PresetList: () => <div data-testid="preset-list" />,
+}))
+vi.mock('./SessionGrid', () => ({ SessionGrid: () => <div data-testid="session-grid" /> }))
+vi.mock('./HintsPanel', () => ({ HintsPanel: () => null }))
+vi.mock('./ResourceBadge', () => ({ ResourceBadge: () => null }))
+vi.mock('./ResourcePanel', () => ({ ResourcePanel: () => null }))
+vi.mock('./SummariesPanel', () => ({ SummariesPanel: () => null }))
+vi.mock('./McpSkillsPanel', () => ({ McpSkillsPanel: () => null }))
+vi.mock('./split-pane', () => ({
+  SessionSplitPane: ({ sessionId, active }: { sessionId: string; active: boolean }) => (
+    <div data-testid={`terminal-${sessionId}`} data-active={String(active)} />
+  ),
+}))
+vi.mock('./WorkspaceInitProgress', () => ({ WorkspaceInitProgress: () => null }))
+vi.mock('./ChatInputBar', () => ({ ChatInputBar: () => null }))
+vi.mock('../hooks/useResourceMonitor', () => ({
+  useResourceMonitor: () => ({
+    snapshot: null,
+    getSessionMetrics: () => null,
+    isLoading: false,
+  }),
 }))
 
 function makeSession(overrides: Partial<{
@@ -229,7 +249,7 @@ describe('ClaudeSessionsView', () => {
     expect(indicators.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('exited active session shows "Session ended" overlay', () => {
+  it('exited active session shows "Session ended" overlay', async () => {
     const session = makeSession({
       id: 'exited',
       folderName: 'exited-folder',
@@ -241,10 +261,12 @@ describe('ClaudeSessionsView', () => {
         sessions={[session]}
       />
     )
-    expect(screen.getByText('Session ended')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByText('Session ended')).toBeInTheDocument()
+    })
   })
 
-  it('renders multiple tabs, clicking selects different session', () => {
+  it('renders multiple tabs, clicking selects different session', async () => {
     const sessions = [
       makeSession({ id: 'first', folderName: 'first-folder' }),
       makeSession({ id: 'second', folderName: 'second-folder' }),
@@ -257,14 +279,20 @@ describe('ClaudeSessionsView', () => {
     )
     expect(screen.getByText('first-folder')).toBeInTheDocument()
     expect(screen.getByText('second-folder')).toBeInTheDocument()
-    expect(screen.getByTestId('terminal-second')).toHaveAttribute(
-      'data-active',
-      'true'
-    )
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-second')).toHaveAttribute(
+        'data-active',
+        'true',
+      )
+    })
+    expect(screen.queryByTestId('terminal-first')).not.toBeInTheDocument()
     fireEvent.click(screen.getByText('first-folder'))
-    expect(screen.getByTestId('terminal-first')).toHaveAttribute(
-      'data-active',
-      'true'
-    )
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-first')).toHaveAttribute(
+        'data-active',
+        'true',
+      )
+    })
+    expect(screen.queryByTestId('terminal-second')).not.toBeInTheDocument()
   })
 })

@@ -4,6 +4,7 @@
  */
 
 import { AppState, ProcessStatus, Project, WorkspaceFolder } from './types'
+import type { AgentProvider } from './agent-provider'
 import { AgentInfo } from './agent-types'
 import { PipelineRun, PipelineConfig } from './pipeline-types'
 import { EnhancerConfig, EnhanceResult, EnhancerSessionCost } from './enhancer-types'
@@ -34,6 +35,73 @@ export interface GitStatus {
   isGitRepo: boolean
 }
 
+export type GitSyncState =
+  | 'synced'
+  | 'behind'
+  | 'ahead'
+  | 'diverged'
+  | 'dirty'
+  | 'no-remote'
+  | 'no-base'
+  | 'not-git'
+  | 'error'
+
+export interface GitSyncStatus {
+  isGitRepo: boolean
+  baseBranch: string | null
+  currentBranch: string | null
+  commitsBehind: number
+  commitsAhead: number
+  uncommitted: number
+  state: GitSyncState
+  error?: string
+}
+
+/** Combined git branch/remote + sync status for Folders (single IPC). */
+export interface GitFolderMeta extends GitInfo, GitSyncStatus {}
+
+export interface GitPullResult extends IpcResult {
+  branch?: string | null
+  behind?: number
+  ahead?: number
+}
+
+/** Tracked vs untracked paths from `git status --porcelain`. */
+export interface GitWorkingTreeChanges {
+  tracked: string[]
+  untracked: string[]
+}
+
+/** How to handle local changes before checkout + pull. */
+export type GitPullLocalChanges = 'stash' | 'discard'
+
+export interface GitPullOptions {
+  localChanges?: GitPullLocalChanges
+  /** When stashing, also include untracked files (`git stash -u`). */
+  stashUntracked?: boolean
+}
+
+export interface GitPullAllResult {
+  path: string
+  success: boolean
+  error?: string
+  branch?: string | null
+}
+
+/** Emitted when a background pull completes (per folder). */
+export type GitPullFinishedEvent = GitPullAllResult
+
+export interface GitPullBatchFinishedEvent {
+  total: number
+  ok: number
+  failed: number
+}
+
+export interface GitPullStartResult {
+  started: boolean
+  count?: number
+}
+
 export interface BranchList {
   current: string | null
   branches: string[]
@@ -52,6 +120,7 @@ export interface PtyCreateOptions {
   folderName: string
   folderPath: string
   useWorktree: boolean
+  provider?: AgentProvider
   resumeClaudeId?: string
   existingWorktreePath?: string
   dangerousMode?: boolean
@@ -150,12 +219,15 @@ export interface BrowserEvent {
 
 export interface ActiveSession {
   id: string
+  provider?: AgentProvider
   claudeSessionId: string | null
   folderName: string
   folderPath: string
   worktreePath: string | null
   branchName: string | null
   dangerousMode?: boolean
+  nickname?: string
+  accentColor?: string
 }
 
 // ── Session history ──
@@ -184,6 +256,13 @@ export interface McpConfigEntry {
   scope: string
   path: string
   servers: Record<string, any>
+}
+
+export interface McpRawFileResult {
+  success: boolean
+  content?: string
+  exists?: boolean
+  error?: string
 }
 
 export interface SkillEntry {
@@ -320,6 +399,10 @@ export interface SessionPreset {
   initialCommands?: string[]
   pinned: boolean
   icon?: string
+  nickname?: string
+  accentColor?: string
+  claudeArgs?: string
+  envVars?: Record<string, string>
   createdAt: number
   lastUsedAt?: number
   useCount: number

@@ -62,7 +62,8 @@ function runInteractive(opts?: {
   let exitCode = -1
   let exitResolve: ((code: number) => void) | null = null
 
-  const proc = ptySpawn('/bin/zsh', ['-i'], {
+  // -fi: interactive shell without loading ~/.zshrc (faster, deterministic in CI)
+  const proc = ptySpawn('/bin/zsh', ['-fi'], {
     name: 'xterm-256color',
     cols: opts?.cols ?? 120,
     rows: opts?.rows ?? 24,
@@ -70,6 +71,7 @@ function runInteractive(opts?: {
     env: {
       ...process.env,
       TERM: 'xterm-256color',
+      PS1: '%# ',
       DISABLE_AUTO_UPDATE: 'true',
       DISABLE_UPDATE_PROMPT: 'true',
       ...opts?.env,
@@ -482,6 +484,9 @@ describe('Large output and streaming', () => {
 
 // ─── INTERACTIVE PTY BEHAVIOR ───────────────────────────────────
 describe('Interactive PTY behavior', () => {
+  // PTY + zsh startup can exceed Vitest's default 5s on loaded machines
+  const interactiveTimeout = 20_000
+
   it('interactive shell responds to typed commands', async () => {
     const pty = runInteractive()
     try {
@@ -493,7 +498,7 @@ describe('Interactive PTY behavior', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 
   it('can run multiple commands sequentially', async () => {
     const pty = runInteractive()
@@ -512,7 +517,7 @@ describe('Interactive PTY behavior', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 
   it('Ctrl+C interrupts a running command', async () => {
     const pty = runInteractive()
@@ -528,7 +533,7 @@ describe('Interactive PTY behavior', () => {
     } finally {
       pty.destroy()
     }
-  }, 15000)
+  }, interactiveTimeout)
 
   it('terminal resize updates COLUMNS', async () => {
     const pty = runInteractive({ cols: 80 })
@@ -539,7 +544,7 @@ describe('Interactive PTY behavior', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 
   it('exit command terminates the shell', async () => {
     const pty = runInteractive()
@@ -551,7 +556,7 @@ describe('Interactive PTY behavior', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 
   it('handles rapid sequential input', async () => {
     const pty = runInteractive()
@@ -570,7 +575,7 @@ describe('Interactive PTY behavior', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 })
 
 // ─── SPECIAL CHARACTERS AND UNICODE ─────────────────────────────
@@ -644,6 +649,7 @@ describe('Process and signal handling', () => {
 
 // ─── BRACKETED PASTE (DevHub-AI ChatInputBar send mechanism) ──────
 describe('Bracketed paste input (ChatInputBar simulation)', () => {
+  const interactiveTimeout = 20_000
   // This is exactly how DevHub-AI sends text from ChatInputBar to the PTY:
   // Step 1: \x1b[200~text\x1b[201~ (bracketed paste)
   // Step 2: \r (Enter key, sent separately)
@@ -659,7 +665,7 @@ describe('Bracketed paste input (ChatInputBar simulation)', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 
   it('bracketed paste then delayed \\r executes command', async () => {
     const pty = runInteractive()
@@ -674,7 +680,7 @@ describe('Bracketed paste input (ChatInputBar simulation)', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 
   it('plain text + \\r without bracketed paste executes command', async () => {
     const pty = runInteractive()
@@ -687,7 +693,7 @@ describe('Bracketed paste input (ChatInputBar simulation)', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 
   it('plain text + \\n without bracketed paste executes command', async () => {
     const pty = runInteractive()
@@ -700,7 +706,7 @@ describe('Bracketed paste input (ChatInputBar simulation)', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 
   it('bracketed paste + \\n executes command', async () => {
     const pty = runInteractive()
@@ -713,7 +719,7 @@ describe('Bracketed paste input (ChatInputBar simulation)', () => {
     } finally {
       pty.destroy()
     }
-  })
+  }, interactiveTimeout)
 
   it('bracketed paste into node readline — single write with \\r', async () => {
     // Simulates Claude Code: a Node.js program using readline
@@ -734,7 +740,7 @@ i.question('INPUT> ', (answer) => { console.log('GOT:' + answer + ':'); i.close(
     } finally {
       pty.destroy()
     }
-  }, 15000)
+  }, interactiveTimeout)
 
   it('plain text + \\r into node readline works', async () => {
     const dir = makeTempDir()
@@ -754,7 +760,7 @@ i.question('INPUT> ', (answer) => { console.log('GOT:' + answer + ':'); i.close(
     } finally {
       pty.destroy()
     }
-  }, 15000)
+  }, interactiveTimeout)
 
   it('plain text + \\n into node readline works', async () => {
     const dir = makeTempDir()
@@ -774,5 +780,5 @@ i.question('INPUT> ', (answer) => { console.log('GOT:' + answer + ':'); i.close(
     } finally {
       pty.destroy()
     }
-  }, 15000)
+  }, interactiveTimeout)
 })

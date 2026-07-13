@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="resources/logo.jpeg" width="600" alt="DevHub-AI" />
+<img src="resources/icon.png" width="200" alt="DevHub-AI" />
 
 # DevHub-AI
 
@@ -83,7 +83,7 @@ Embedded terminal sessions running the Claude CLI inside a real shell. Each sess
 | **Session history** | Browse, search, and resume past conversations with auto-generated titles and keyword tags — keeps 6 months of history |
 | **Auto-recap on resume** | Resuming a session automatically asks Claude to summarize what happened so you can pick up where you left off |
 | **Full state persistence** | DevHub-AI remembers the last active tab, project, and Claude session so you reopen exactly where you left off |
-| **Waiting indicators** | A pulsing dot appears on the session card and Claude tab when an agent is idle and waiting for your input — never miss a prompt |
+| **Waiting indicators** | A pulsing dot appears on the session card and Sessions tab when an agent is idle and waiting for your input — never miss a prompt |
 | **Git worktrees** | Every session gets an isolated branch — no conflicts with your main work. Worktree sessions resume into the correct directory |
 | **File explorer & search** | Browse project files and search content in a unified side panel |
 | **Diff viewer** | Review all changes Claude made before committing |
@@ -168,11 +168,81 @@ npm run dev
 # Production build
 npm run build
 
-# Package as macOS .app
+# Package as macOS .app (uses resources/icon.icns for Dock & Finder)
 npm run package
+```
 
-# Install to Applications
+### Install on macOS (Applications folder)
+
+After `npm run package`, install the app so it appears in **Launchpad**, **Spotlight**, and the **Dock** with the DevHub-AI icon:
+
+**Option A — one command (recommended)**
+
+```bash
+npm run install-app
+```
+
+This copies `dist/DevHub-AI.app` to `/Applications/DevHub-AI.app` and clears quarantine flags.
+
+**Option B — manual copy**
+
+```bash
 cp -R dist/DevHub-AI.app /Applications/
+xattr -dr com.apple.quarantine /Applications/DevHub-AI.app
+open /Applications/DevHub-AI.app
+```
+
+**Option C — Finder**
+
+1. Open the `dist` folder in the project.
+2. Drag **DevHub-AI.app** into **Applications** (or onto the Applications shortcut in a Finder sidebar).
+3. Double-click **DevHub-AI** in Applications to launch.
+
+**Keep the icon in the Dock (task bar)**
+
+1. Open DevHub-AI from Applications (or Spotlight: `Cmd+Space`, type `DevHub-AI`).
+2. Right-click the app icon in the Dock.
+3. Choose **Options → Keep in Dock**.
+
+**Icon still shows the old Electron logo?**
+
+| If you launch via… | Icon you see |
+|---|---|
+| `npm run dev` | Custom **DevHub-AI** icon (after `npm run icons` or `npm run patch-dev-icon`) |
+| `/Applications/DevHub-AI.app` | Custom **DevHub-AI** hub icon |
+
+Fix a stale **dev** icon (`npm run dev` still shows Electron):
+
+```bash
+npm run icons            # regenerates icon.icns and patches node_modules/electron
+# or: npm run patch-dev-icon
+# Quit any running Electron/DevHub-AI, then:
+npm run dev
+```
+
+Fix the **installed** app icon:
+
+```bash
+npm run icons          # regenerate icon.icns from icon.png
+npm run install-app    # reinstall to /Applications
+npm run refresh-icon   # re-copy icon + restart Dock cache + launch app
+open /Applications/DevHub-AI.app
+```
+
+If Finder still shows the old icon, log out and back in (macOS caches app icons aggressively).
+
+**Regenerate app icon assets** (from `resources/icon.png`):
+
+```bash
+npm run icons    # writes icon.icns from icon.png
+npm run package  # rebuild .app with new icon
+```
+
+**Developer install** (symlinks source into `/Applications` for fast iteration):
+
+```bash
+npm run install-dev
+npm run build    # rebuild after code changes, then relaunch
 ```
 
 ---
@@ -199,7 +269,7 @@ cp -R dist/DevHub-AI.app /Applications/
 | `Cmd+K` | Focus search / clear terminal |
 | `Cmd+1` | Launchpad tab |
 | `Cmd+2` | All Folders tab |
-| `Cmd+3` | Claude tab |
+| `Cmd+3` | Sessions tab (Claude, Cursor Agent, Codex, Shell) |
 | `Cmd+4` | Agents tab |
 | `Cmd+5` | DB Access tab |
 | `Esc` | Close modal / exit mode |
@@ -318,7 +388,7 @@ DevHub-AI detects port conflicts automatically. Check the project card status in
 <details>
 <summary><strong>Browser bridge not working</strong></summary>
 
-The `browser` command is only available inside Claude sessions started from the Claude tab. Ensure you're in a DevHub-AI-managed session where the PATH has been configured.
+The `browser` command is only available inside agent sessions started from the Sessions tab. Ensure you're in a DevHub-AI-managed session where the PATH has been configured.
 </details>
 
 <details>

@@ -13,9 +13,9 @@ describe('NewSessionModal', () => {
     vi.mocked(window.api.listWorkspaceFolders).mockResolvedValue(mockFolders)
   })
 
-  it('renders modal title "New Claude Session"', async () => {
+  it('renders modal title "New Session"', async () => {
     render(<NewSessionModal scanPath="/tmp" onStart={vi.fn()} onClose={vi.fn()} />)
-    expect(screen.getByText('New Claude Session')).toBeInTheDocument()
+    expect(screen.getByText('New Session')).toBeInTheDocument()
     await screen.findByText('project-a')
   })
 
@@ -51,15 +51,15 @@ describe('NewSessionModal', () => {
     const onStart = vi.fn()
     render(<NewSessionModal scanPath="/tmp" onStart={onStart} onClose={vi.fn()} />)
     const folderA = await screen.findByText('project-a')
-    fireEvent.click(folderA.closest('.new-session-folder-item')!)
-    expect(onStart).toHaveBeenCalledWith(mockFolders[0], false)
+    fireEvent.click(folderA)
+    expect(onStart).toHaveBeenCalledWith(mockFolders[0], false, 'claude')
   })
 
   it('close button calls onClose', async () => {
     const onClose = vi.fn()
     render(<NewSessionModal scanPath="/tmp" onStart={vi.fn()} onClose={onClose} />)
     await screen.findByText('project-a')
-    const closeBtn = screen.getByRole('button', { name: '×' })
+    const closeBtn = screen.getByRole('button', { name: 'x' })
     fireEvent.click(closeBtn)
     expect(onClose).toHaveBeenCalledTimes(1)
   })

@@ -6,6 +6,7 @@ interface Shortcuts {
   onTab2: () => void
   onTab3?: () => void
   onTab4?: () => void
+  onTab5?: () => void
   onEscape: () => void
   onHelp: () => void
 }
@@ -55,6 +56,11 @@ export function useKeyboardShortcuts(shortcuts: Shortcuts) {
       if ((e.metaKey || e.ctrlKey) && e.key === '4') {
         e.preventDefault()
         shortcuts.onTab4?.()
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === '5') {
+        e.preventDefault()
+        shortcuts.onTab5?.()
         return
       }
 

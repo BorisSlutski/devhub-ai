@@ -1,4 +1,64 @@
-/* ── Folders View ── */
+/* ── Pull confirm modal ── */
+
+.pull-confirm-modal {
+  max-width: 480px;
+}
+
+.pull-confirm-lead {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.pull-confirm-file-group {
+  margin-bottom: 12px;
+}
+
+.pull-confirm-file-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.pull-confirm-file-list {
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.pull-confirm-file-list li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 0;
+}
+
+.pull-confirm-more {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.pull-confirm-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  cursor: pointer;
+}
+
+/* ── Folders View (table layout) ── */
 
 .folders-view {
   display: flex;
@@ -14,49 +74,126 @@
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
-.folders-list {
+.folders-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.folders-table-wrap {
   flex: 1;
-  overflow-y: auto;
-  padding: 8px 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
 }
 
-.folder-row {
-  display: flex;
+.folders-table-header,
+.folders-table-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(160px, 1.1fr) 72px 72px minmax(200px, 1.4fr);
+  gap: 8px 12px;
   align-items: center;
-  justify-content: space-between;
   padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.folders-table-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.folders-table-body {
+  flex: 1;
+}
+
+.folders-table-row {
+  font-size: 13px;
   transition: background 0.1s;
 }
 
-.folder-row:hover {
+.folders-table-row:hover {
   background: var(--bg-card-hover);
 }
 
-.folder-info {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.folders-col {
   min-width: 0;
-  flex: 1;
+  overflow: hidden;
 }
 
-.folder-name {
-  font-size: 13px;
+.folders-col-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.folder-favorite-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  color: var(--text-muted);
+  opacity: 0.45;
+}
+
+.folder-favorite-btn:hover {
+  opacity: 1;
+  color: var(--orange);
+}
+
+.folder-favorite-btn.is-favorite {
+  opacity: 1;
+  color: var(--orange);
+}
+
+.folders-col-name .folder-name {
   font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 120px;
+  display: block;
+  min-width: 0;
+  flex: 1;
 }
 
-.folder-meta {
+.folders-empty {
+  padding: 24px 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.folders-sync-cell {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.folders-refresh-btn {
+  min-width: 28px;
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.folders-refresh-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: rgba(88, 166, 255, 0.35);
 }
 
 .git-branch {
@@ -66,44 +203,119 @@
   padding: 1px 8px;
   border-radius: 10px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  max-width: 100%;
 }
 
 .git-icon {
   font-size: 12px;
 }
 
-.git-remote {
-  font-size: 10px;
+.git-remote-link {
+  font-size: 11px;
   color: var(--text-muted);
+  background: none;
+  border: none;
   cursor: pointer;
-  padding: 1px 6px;
-  border-radius: 8px;
-  white-space: nowrap;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.git-remote:hover {
+.git-remote-link:hover {
+  color: var(--accent);
+}
+
+.git-local-only {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.no-git {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.git-loading {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.git-sync-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.git-sync-badge.sync-synced {
+  color: var(--green);
+  background: rgba(63, 185, 80, 0.12);
+}
+
+.git-sync-badge.sync-behind {
+  color: var(--orange);
+  background: rgba(210, 153, 34, 0.12);
+}
+
+.git-sync-badge.sync-ahead {
   color: var(--accent);
   background: rgba(88, 166, 255, 0.1);
 }
 
-.git-local-only {
-  font-size: 10px;
-  color: var(--text-muted);
-  font-style: italic;
-  white-space: nowrap;
+.git-sync-badge.sync-diverged,
+.git-sync-badge.sync-dirty,
+.git-sync-badge.sync-error {
+  color: var(--red);
+  background: rgba(248, 81, 73, 0.1);
 }
 
-.no-git {
-  font-size: 10px;
+.git-sync-badge.sync-no-remote,
+.git-sync-badge.sync-no-base {
   color: var(--text-muted);
-  opacity: 0.5;
-  white-space: nowrap;
+  background: rgba(139, 148, 158, 0.12);
 }
 
-.git-loading {
-  font-size: 10px;
+.git-sync-badge.pulling {
+  opacity: 0.7;
+}
+
+.git-pull-btn {
+  color: var(--accent);
+  border-color: rgba(88, 166, 255, 0.35);
+}
+
+.folders-bulk-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: rgba(88, 166, 255, 0.08);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.folders-bulk-dismiss {
+  background: none;
+  border: none;
   color: var(--text-muted);
-  opacity: 0.4;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.folders-bulk-dismiss:hover {
+  color: var(--text-primary);
 }
 
 .folder-modified {
@@ -115,13 +327,8 @@
 .folder-actions {
   display: flex;
   gap: 4px;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.folder-row:hover .folder-actions {
-  opacity: 1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .btn-ide {
@@ -158,7 +365,10 @@
   background: rgba(217, 119, 6, 0.2);
 }
 
-.claude-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.skeleton-folder-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
 }

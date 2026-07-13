@@ -1,3 +1,32 @@
+.new-session-provider-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.new-session-provider-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.new-session-provider-option.active {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.new-session-provider-option input {
+  margin: 0;
+}
+
 /* ── New Session Modal Folder Items ── */
 
 .new-session-folder-item {

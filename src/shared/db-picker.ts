@@ -1,0 +1,170 @@
+export interface DbProducerPicker {
+  name: string
+  /** KGB ownership tag from the Akeyless path (e.g. kgb-aglianico). */
+  kgb: string
+  /** Akeyless folder cluster — last path segment before the producer leaf (e.g. locality_common_us). */
+  cluster: string
+  /** Akeyless producer leaf / host routing id — not the MySQL database name. */
+  producer: string
+  /** MySQL/Mongo schema name. */
+  dbName: string
+  type: 'mysql' | 'mongo'
+}
+
+/** e.g. pdb-mysql-billing0a.42-wix_billing → wix_billing */
+function dbNameFromLeaf(leaf: string): string {
+  const dotted = leaf.match(/\.[\da-z.]+-(.+)$/i)
+  if (dotted) return dotted[1]
+  const dashed = leaf.match(/-([a-z0-9_]+)$/i)
+  return dashed ? dashed[1] : leaf
+}
+
+/**
+ * Parse KGB, cluster folder, producer leaf, and db name from a full Akeyless path.
+ * Path: /prod/dba/developer-access/mysql/<kgb-tag>/<...>/<cluster-folder>/<producer-leaf>
+ */
+export function parseProducerPathFields(name: string): Pick<
+  DbProducerPicker,
+  'kgb' | 'cluster' | 'producer' | 'dbName'
+> {
+  const parts = name.split('/').filter(Boolean)
+  const typeIdx = parts.findIndex((p) => p === 'mysql' || p === 'mongo')
+  const kgb = typeIdx >= 0 ? (parts[typeIdx + 1] ?? '') : ''
+  const leaf = parts[parts.length - 1] ?? ''
+  const mid = typeIdx >= 0 ? parts.slice(typeIdx + 2, -1) : []
+  const cluster = mid.length > 0 ? mid[mid.length - 1] : ''
+  return { kgb, cluster, producer: leaf, dbName: dbNameFromLeaf(leaf) }
+}
+
+/** Cluster folder name for browse/filter — parsed from path when missing on cached rows. */
+export function producerCluster(p: Pick<DbProducerPicker, 'name' | 'cluster'>): string {
+  if (p.cluster) return p.cluster
+  return parseProducerPathFields(p.name).cluster
+}
+
+/** @deprecated Use producerCluster — kept for callers that still import this name. */
+export function clusterFromProducer(p: Pick<DbProducerPicker, 'name' | 'cluster'>): string {
+  return producerCluster(p)
+}
+
+function matchesProducerQuery(p: DbProducerPicker, q: string): boolean {
+  return (
+    p.dbName.toLowerCase().includes(q) ||
+    p.producer.toLowerCase().includes(q) ||
+    p.kgb.toLowerCase().includes(q) ||
+    producerCluster(p).toLowerCase().includes(q) ||
+    p.name.toLowerCase().includes(q)
+  )
+}
+
+/** Stable browse identity — same display tuple from different Akeyless paths collapses to one row. */
+export function producerBrowseKey(p: DbProducerPicker): string {
+  return `${p.type}\0${p.dbName}\0${p.kgb}\0${p.producer}`
+}
+
+function pickCanonicalProducer(candidates: DbProducerPicker[]): DbProducerPicker {
+  return [...candidates].sort(
+    (a, b) => a.name.length - b.name.length || a.name.localeCompare(b.name),
+  )[0]
+}
+
+/** Collapse producers that share the same browse identity (type + dbName + kgb + producer). */
+export function dedupeProducersForBrowse(producers: DbProducerPicker[]): DbProducerPicker[] {
+  const byKey = new Map<string, DbProducerPicker[]>()
+  for (const p of producers) {
+    const key = producerBrowseKey(p)
+    const list = byKey.get(key) ?? []
+    list.push(p)
+    byKey.set(key, list)
+  }
+  return Array.from(byKey.values()).map(pickCanonicalProducer)
+}
+
+/** Filter by db name, producer leaf, KGB tag, cluster folder, or full path. Empty query returns []. */
+export function filterProducers(producers: DbProducerPicker[], query: string): DbProducerPicker[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  return dedupeProducersForBrowse(producers.filter((p) => matchesProducerQuery(p, q)))
+}
+
+/** All producers matching query, or every producer when query is empty (database browse mode). */
+export function listProducersForBrowse(
+  producers: DbProducerPicker[],
+  query: string,
+): DbProducerPicker[] {
+  const q = query.trim().toLowerCase()
+  const list = q ? producers.filter((p) => matchesProducerQuery(p, q)) : producers
+  return dedupeProducersForBrowse(list).sort(
+    (a, b) => a.dbName.localeCompare(b.dbName) || a.kgb.localeCompare(b.kgb),
+  )
+}
+
+export function applyProducerBrowseFilters(
+  producers: DbProducerPicker[],
+  filters: { kgb?: string; cluster?: string },
+): DbProducerPicker[] {
+  const kgb = filters.kgb?.trim()
+  const cluster = filters.cluster?.trim()
+  if (!kgb && !cluster) return producers
+  return producers.filter((p) => {
+    if (kgb && p.kgb !== kgb) return false
+    if (cluster && producerCluster(p) !== cluster) return false
+    return true
+  })
+}
+
+export function groupProducersByCluster(
+  producers: DbProducerPicker[],
+): { cluster: string; producers: DbProducerPicker[] }[] {
+  const byCluster = new Map<string, DbProducerPicker[]>()
+  for (const p of producers) {
+    const cluster = producerCluster(p)
+    if (!cluster) continue
+    const list = byCluster.get(cluster) ?? []
+    list.push(p)
+    byCluster.set(cluster, list)
+  }
+  return Array.from(byCluster.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([cluster, clusterProducers]) => ({
+      cluster,
+      producers: clusterProducers.sort((a, b) => a.dbName.localeCompare(b.dbName)),
+    }))
+}
+
+export function groupProducersByKgb(
+  producers: DbProducerPicker[],
+): { kgb: string; producers: DbProducerPicker[] }[] {
+  const byKgb = new Map<string, DbProducerPicker[]>()
+  for (const p of producers) {
+    const list = byKgb.get(p.kgb) ?? []
+    list.push(p)
+    byKgb.set(p.kgb, list)
+  }
+  return Array.from(byKgb.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([kgb, kgbProducers]) => ({
+      kgb,
+      producers: kgbProducers.sort((a, b) => a.dbName.localeCompare(b.dbName)),
+    }))
+}
+
+/** dbName values that appear more than once in the list */
+export function duplicateDbNames(producers: DbProducerPicker[]): Set<string> {
+  const counts = new Map<string, number>()
+  for (const p of producers) {
+    counts.set(p.dbName, (counts.get(p.dbName) ?? 0) + 1)
+  }
+  const dupes = new Set<string>()
+  for (const [name, count] of counts) {
+    if (count > 1) dupes.add(name)
+  }
+  return dupes
+}
+
+export function shouldShowProducerSubtitle(
+  producer: DbProducerPicker,
+  dupes: Set<string>,
+): boolean {
+  return dupes.has(producer.dbName)
+}

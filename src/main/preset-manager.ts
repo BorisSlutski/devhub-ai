@@ -14,6 +14,10 @@ export interface SessionPreset {
   initialCommands?: string[]
   pinned: boolean
   icon?: string
+  nickname?: string
+  accentColor?: string
+  claudeArgs?: string
+  envVars?: Record<string, string>
   createdAt: number
   lastUsedAt?: number
   useCount: number

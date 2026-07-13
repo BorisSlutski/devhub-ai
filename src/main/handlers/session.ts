@@ -1,10 +1,20 @@
 import { ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { readdirSync, statSync, mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs'
-import { execSync, exec, ChildProcess } from 'child_process'
+import { execSync, execFile, execFileSync, ChildProcess } from 'child_process'
 import { homedir } from 'os'
-import { ptyManager } from '../pty-manager'
-import { loadState } from '../store'
+import {
+  ptyCreateSession,
+  ptyWrite,
+  ptyResize,
+  ptyDestroy,
+  ptyGetSessions,
+} from '../pty-backend'
+import { runSystemCheck } from '../system-check'
+import { buildAgentCommand, worktreeBranchPrefix } from '../agent-commands'
+import { normalizeAgentProvider, type AgentProvider } from '../../shared/agent-provider'
+import { checkForUpdates, downloadUpdate, getUpdateStatus, installUpdate } from '../updater'
+import { loadState, saveState } from '../store'
 import { cleanupSessionRtkFlag } from '../rtk-manager'
 import { promptEnhancer } from '../prompt-enhancer'
 import { activeSessions, scanProjectSessions, getSessionTitle } from '../session-history'
@@ -12,6 +22,7 @@ import { ensureDevHubAIClaudeMd } from '../claude-md'
 import { statuslineWatcher } from '../statusline-watcher'
 import { workspaceInitTracker } from '../workspace-init-tracker'
 import { notificationManager } from '../notification-manager'
+import { isGitRepo, getCurrentBranch, gitFetchOrigin, isSafeRefName } from '../git-sync'
 
 let mainWindowRef: Electron.BrowserWindow | null = null
 
@@ -43,6 +54,10 @@ export function registerSessionHandlers() {
         cwd: projectPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
       }).trim()
 
+      if (!isSafeRefName(baseBranch)) {
+        return { success: false, error: `Unsafe branch name: ${baseBranch}` }
+      }
+
       const timestamp = Date.now().toString(36)
       const slug = projectName.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()
       const worktreeBase = join(homedir(), '.devhub-ai', 'worktrees', slug)
@@ -51,8 +66,9 @@ export function registerSessionHandlers() {
 
       mkdirSync(join(worktreeBase, timestamp), { recursive: true })
 
-      execSync(
-        `git worktree add -b "${branchName}" "${worktreePath}" "${baseBranch}"`,
+      execFileSync(
+        'git',
+        ['worktree', 'add', '-b', branchName, worktreePath, baseBranch],
         { cwd: projectPath, encoding: 'utf-8', timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'] }
       )
 
@@ -87,11 +103,13 @@ export function registerSessionHandlers() {
     folderName: string
     folderPath: string
     useWorktree: boolean
+    provider?: AgentProvider
     resumeClaudeId?: string
     existingWorktreePath?: string
     dangerousMode?: boolean
     model?: string
   }) => {
+    const provider = normalizeAgentProvider(opts.provider)
     const tracker = workspaceInitTracker.create(opts.sessionId)
     tracker.advance('pending', 'Initializing workspace...')
 
@@ -103,31 +121,19 @@ export function registerSessionHandlers() {
     if (tracker.isCancelled()) return { success: false, error: 'Cancelled' }
 
     if (worktreePath) {
-      try {
-        branchName = execSync('git rev-parse --abbrev-ref HEAD', {
-          cwd: worktreePath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
-        }).trim()
-      } catch { /* ignore */ }
+      branchName = await getCurrentBranch(worktreePath)
     }
 
     if (opts.useWorktree && !worktreePath) {
-      let isGitRepo = false
-      try {
-        execSync('git rev-parse --is-inside-work-tree', {
-          cwd: opts.folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
-        })
-        isGitRepo = true
-      } catch { /* not a git repo */ }
+      const folderIsGit = await isGitRepo(opts.folderPath)
 
-      if (isGitRepo) {
+      if (folderIsGit) {
         // Stage: fetching
         tracker.advance('fetching', 'Fetching latest changes...')
         if (tracker.isCancelled()) return { success: false, error: 'Cancelled' }
 
         try {
-          execSync('git fetch --quiet', {
-            cwd: opts.folderPath, encoding: 'utf-8', timeout: 15000, stdio: ['ignore', 'pipe', 'ignore']
-          })
+          await gitFetchOrigin(opts.folderPath)
         } catch { /* fetch failure is non-fatal */ }
 
         // Stage: creating_worktree
@@ -135,23 +141,25 @@ export function registerSessionHandlers() {
         if (tracker.isCancelled()) return { success: false, error: 'Cancelled' }
 
         try {
-          const baseBranch = execSync('git rev-parse --abbrev-ref HEAD', {
-            cwd: opts.folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
-          }).trim()
+          const baseBranch = (await getCurrentBranch(opts.folderPath)) ?? 'main'
+          if (!isSafeRefName(baseBranch)) {
+            throw new Error(`Unsafe branch name: ${baseBranch}`)
+          }
 
           const timestamp = Date.now().toString(36)
           const slug = opts.folderName.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()
           const worktreeBase = join(homedir(), '.devhub-ai', 'worktrees', slug)
           worktreePath = join(worktreeBase, timestamp, 'worktree')
-          branchName = `devhub-ai/claude-${slug}-${timestamp}`
+          branchName = `${worktreeBranchPrefix(provider)}${slug}-${timestamp}`
 
           mkdirSync(join(worktreeBase, timestamp), { recursive: true })
 
           // Use async exec for cancellation support during worktree creation
           const worktreeCreated = await new Promise<boolean>((resolve, reject) => {
-            // Note: the branch/path values here are internally generated, not user input
-            const child: ChildProcess = exec(
-              `git worktree add -b "${branchName}" "${worktreePath}" "${baseBranch}"`,
+            // branchName/worktreePath are internally generated; baseBranch is validated above
+            const child: ChildProcess = execFile(
+              'git',
+              ['worktree', 'add', '-b', branchName as string, worktreePath as string, baseBranch],
               { cwd: opts.folderPath, encoding: 'utf-8', timeout: 15000 },
               (err) => {
                 if (err) reject(err)
@@ -198,8 +206,8 @@ export function registerSessionHandlers() {
     const currentState = loadState()
     ensureDevHubAIClaudeMd(sessionCwd, currentState.rtkEnabled)
 
-    // Run workspace setup script if present
-    runWorkspaceSetup(sessionCwd, opts.folderPath)
+    // Run workspace setup script if present (gated behind user trust confirmation)
+    await runWorkspaceSetup(sessionCwd, opts.folderPath)
 
     // Stage: spawning_pty
     tracker.advance('spawning_pty', 'Spawning terminal...')
@@ -209,14 +217,14 @@ export function registerSessionHandlers() {
       return { success: false, error: 'Cancelled' }
     }
 
-    const permFlag = opts.dangerousMode ? ' --dangerously-skip-permissions' : ''
-    const modelFlag = opts.model ? ` --model ${opts.model}` : ''
-    let command = `claude${modelFlag}${permFlag}`
-    if (opts.resumeClaudeId) {
-      command = `claude --resume ${opts.resumeClaudeId}${modelFlag}${permFlag}`
-    }
+    const command = buildAgentCommand({
+      provider,
+      resumeClaudeId: opts.resumeClaudeId,
+      dangerousMode: opts.dangerousMode,
+      model: opts.model,
+    })
 
-    const result = ptyManager.createSession(
+    const result = await ptyCreateSession(
       opts.sessionId,
       opts.folderName,
       opts.folderPath,
@@ -246,20 +254,20 @@ export function registerSessionHandlers() {
     const cancelled = workspaceInitTracker.cancel(sessionId)
     if (!cancelled) {
       // If tracker not found, the init may already be done — try to destroy the PTY
-      ptyManager.destroySession(sessionId)
+      void ptyDestroy(sessionId)
     }
   })
 
   ipcMain.on('pty-write', (_event, sessionId: string, data: string) => {
-    ptyManager.write(sessionId, data)
+    ptyWrite(sessionId, data)
   })
 
   ipcMain.on('pty-resize', (_event, sessionId: string, cols: number, rows: number) => {
-    ptyManager.resize(sessionId, cols, rows)
+    ptyResize(sessionId, cols, rows)
   })
 
-  ipcMain.handle('pty-destroy', (_event, sessionId: string) => {
-    ptyManager.destroySession(sessionId)
+  ipcMain.handle('pty-destroy', async (_event, sessionId: string) => {
+    await ptyDestroy(sessionId)
     statuslineWatcher.unwatchSession(sessionId)
     cleanupSessionRtkFlag(sessionId)
     promptEnhancer.clearSession(sessionId)
@@ -314,7 +322,7 @@ export function registerSessionHandlers() {
   })
 
   ipcMain.handle('pty-list-sessions', () => {
-    return ptyManager.getSessions()
+    return ptyGetSessions()
   })
 
   // Active sessions (auto-resume)
@@ -342,6 +350,34 @@ export function registerSessionHandlers() {
     return activeSessions.getActiveId()
   })
 
+  ipcMain.handle('active-sessions-update-meta', (_event, id: string, meta: { nickname?: string; accentColor?: string }) => {
+    activeSessions.updateMeta(id, meta)
+  })
+
+  ipcMain.handle('active-sessions-set-order', (_event, order: string[]) => {
+    activeSessions.setSessionOrder(order)
+  })
+
+  ipcMain.handle('active-sessions-get-ui', () => {
+    return activeSessions.getUiState()
+  })
+
+  ipcMain.handle('active-sessions-set-ui', (_event, partial: {
+    sessionOrder?: string[]
+    gridMode?: boolean
+    gridLayout?: string
+    gridSessionIds?: string[]
+  }) => {
+    activeSessions.setUiState(partial as any)
+  })
+
+  ipcMain.handle('system-check', () => runSystemCheck())
+
+  ipcMain.handle('app-check-updates', () => checkForUpdates())
+  ipcMain.handle('app-download-update', () => downloadUpdate())
+  ipcMain.handle('app-install-update', () => { installUpdate() })
+  ipcMain.handle('app-get-update-status', () => getUpdateStatus())
+
   // Session history
   ipcMain.handle('session-history-scan', (_event, folderPath: string, folderName: string) => {
     return scanProjectSessions(folderPath, folderName)
@@ -361,13 +397,49 @@ function cleanupPartialWorktree(worktreePath: string | null, folderPath: string)
   } catch { /* partial cleanup is best-effort */ }
 }
 
-function runWorkspaceSetup(sessionCwd: string, projectPath: string) {
+function isProjectTrustedForSetup(projectPath: string): boolean {
+  return (loadState().trustedSetupProjectPaths ?? []).includes(projectPath)
+}
+
+function trustProjectForSetup(projectPath: string): void {
+  const state = loadState()
+  const list = state.trustedSetupProjectPaths ?? []
+  if (!list.includes(projectPath)) {
+    saveState({ ...state, trustedSetupProjectPaths: [...list, projectPath] })
+  }
+}
+
+/** Ask the user to approve running a project's .devhub-ai/config.json setup scripts before ever executing them. */
+async function confirmWorkspaceSetup(projectPath: string, scripts: string[]): Promise<boolean> {
+  if (isProjectTrustedForSetup(projectPath)) return true
+  if (!mainWindowRef) return false
+
+  const { response, checkboxChecked } = await dialog.showMessageBox(mainWindowRef, {
+    type: 'warning',
+    buttons: ['Skip', 'Run Setup Scripts'],
+    defaultId: 0,
+    cancelId: 0,
+    title: 'Untrusted Workspace Setup Scripts',
+    message: `"${projectPath}" defines setup scripts in .devhub-ai/config.json`,
+    detail: `Starting a session here will run the following script(s) with your user permissions:\n\n${scripts.join('\n')}\n\nOnly continue if you trust this project.`,
+    checkboxLabel: 'Trust this project and don\'t ask again',
+    checkboxChecked: false,
+  })
+
+  const approved = response === 1
+  if (approved && checkboxChecked) trustProjectForSetup(projectPath)
+  return approved
+}
+
+async function runWorkspaceSetup(sessionCwd: string, projectPath: string) {
   const configPath = join(projectPath, '.devhub-ai', 'config.json')
   if (!existsSync(configPath)) return
 
   try {
     const config = JSON.parse(readFileSync(configPath, 'utf-8'))
-    if (!config.setup || !Array.isArray(config.setup)) return
+    if (!config.setup || !Array.isArray(config.setup) || config.setup.length === 0) return
+
+    if (!(await confirmWorkspaceSetup(projectPath, config.setup))) return
 
     for (const script of config.setup) {
       const scriptPath = join(projectPath, script)

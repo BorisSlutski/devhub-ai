@@ -3,12 +3,15 @@ import type {
   AppState, ProcessStatus, Project, WorkspaceFolder,
   AgentInfo, PipelineRun, PipelineConfig,
   EnhancerConfig, EnhanceResult, EnhancerSessionCost,
-  IpcResult, GitInfo, GitStatus, BranchList, WorktreeResult,
+  IpcResult, GitInfo, GitFolderMeta, GitStatus, GitSyncStatus, GitPullResult, GitPullAllResult,
+  GitPullFinishedEvent, GitPullBatchFinishedEvent, GitPullStartResult,
+  GitWorkingTreeChanges, GitPullOptions,
+  BranchList, WorktreeResult,
   PtyCreateOptions, PtyCreateResult, PtySessionInfo,
   DirectoryEntry, FileContent, FileSearchResult, FileSearchEntry, DiffResult,
   SystemPortInfo, RtkStatus, RtkToggleResult, RtkGainStats,
   BrowserEvent, ActiveSession, ClaudeSessionInfo, SessionTitle,
-  McpConfigEntry, SkillEntry, CreateCommandOptions, SaveTempImageOptions,
+  McpConfigEntry, McpRawFileResult, SkillEntry, CreateCommandOptions, SaveTempImageOptions,
   StatuslineData, RecoverableSession, ScrollbackRestoreResult, ResourceSnapshot,
   InitProgress, NotificationSettings,
   SessionPreset, SessionPresetCreate, PresetLaunchOptions, PresetLaunchResult,
@@ -47,8 +50,35 @@ const api = {
   // Git
   getGitInfo: (folderPath: string): Promise<GitInfo> =>
     ipcRenderer.invoke('get-git-info', folderPath),
+  getFolderGitMeta: (folderPath: string, fetch?: boolean): Promise<GitFolderMeta> =>
+    ipcRenderer.invoke('get-folder-git-meta', folderPath, fetch ?? false),
   getGitStatus: (folderPath: string): Promise<GitStatus> =>
     ipcRenderer.invoke('get-git-status', folderPath),
+  getGitSyncStatus: (folderPath: string, fetch?: boolean): Promise<GitSyncStatus> =>
+    ipcRenderer.invoke('get-git-sync-status', folderPath, fetch ?? false),
+  getFolderWorkingTree: (folderPath: string): Promise<GitWorkingTreeChanges> =>
+    ipcRenderer.invoke('get-folder-working-tree', folderPath),
+  pullFolderToBase: (folderPath: string, options?: GitPullOptions): Promise<GitPullResult> =>
+    ipcRenderer.invoke('pull-folder-to-base', folderPath, options),
+  pullAllFoldersToBase: (folderPaths: string[]): Promise<GitPullAllResult[]> =>
+    ipcRenderer.invoke('pull-all-folders-to-base', folderPaths),
+  startPullFolderToBase: (
+    folderPath: string,
+    options?: GitPullOptions,
+  ): Promise<GitPullStartResult> =>
+    ipcRenderer.invoke('start-pull-folder-to-base', folderPath, options),
+  startPullAllFoldersToBase: (folderPaths: string[]): Promise<GitPullStartResult> =>
+    ipcRenderer.invoke('start-pull-all-folders-to-base', folderPaths),
+  onGitPullFinished: (callback: (event: GitPullFinishedEvent) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, data: GitPullFinishedEvent) => callback(data)
+    ipcRenderer.on('git-pull-finished', handler)
+    return () => ipcRenderer.removeListener('git-pull-finished', handler)
+  },
+  onGitPullBatchFinished: (callback: (event: GitPullBatchFinishedEvent) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, data: GitPullBatchFinishedEvent) => callback(data)
+    ipcRenderer.on('git-pull-batch-finished', handler)
+    return () => ipcRenderer.removeListener('git-pull-batch-finished', handler)
+  },
   listBranches: (folderPath: string): Promise<BranchList> =>
     ipcRenderer.invoke('list-branches', folderPath),
   checkoutBranch: (folderPath: string, branchName: string): Promise<IpcResult> =>
@@ -189,6 +219,16 @@ const api = {
     ipcRenderer.invoke('mcp-check-status'),
   mcpSaveConfig: (filePath: string, servers: Record<string, any>): Promise<IpcResult> =>
     ipcRenderer.invoke('mcp-save-config', filePath, servers),
+  mcpReadRawFile: (filePath: string): Promise<McpRawFileResult> =>
+    ipcRenderer.invoke('mcp-read-raw-file', filePath),
+  mcpSaveRawFile: (filePath: string, content: string): Promise<IpcResult> =>
+    ipcRenderer.invoke('mcp-save-raw-file', filePath, content),
+  mcpMergeServers: (
+    filePath: string,
+    servers: Record<string, any>,
+    mode: 'merge' | 'replace'
+  ): Promise<IpcResult> =>
+    ipcRenderer.invoke('mcp-merge-servers', filePath, servers, mode),
   skillsList: (projectPath?: string): Promise<SkillEntry[]> =>
     ipcRenderer.invoke('skills-list', projectPath),
   createCommand: (opts: CreateCommandOptions): Promise<IpcResult & { path?: string }> =>
@@ -219,6 +259,38 @@ const api = {
     ipcRenderer.invoke('active-sessions-set-active-id', id),
   activeSessionsGetActiveId: (): Promise<string | null> =>
     ipcRenderer.invoke('active-sessions-get-active-id'),
+  activeSessionsUpdateMeta: (id: string, meta: { nickname?: string; accentColor?: string }): Promise<void> =>
+    ipcRenderer.invoke('active-sessions-update-meta', id, meta),
+  activeSessionsSetOrder: (order: string[]): Promise<void> =>
+    ipcRenderer.invoke('active-sessions-set-order', order),
+  activeSessionsGetUi: (): Promise<{
+    sessionOrder: string[]
+    gridMode: boolean
+    gridLayout: string
+    gridSessionIds: string[]
+  }> => ipcRenderer.invoke('active-sessions-get-ui'),
+  activeSessionsSetUi: (partial: {
+    sessionOrder?: string[]
+    gridMode?: boolean
+    gridLayout?: string
+    gridSessionIds?: string[]
+  }): Promise<void> => ipcRenderer.invoke('active-sessions-set-ui', partial),
+
+  systemCheck: (): Promise<{
+    node: { ok: boolean; version: string | null }
+    claude: { ok: boolean; version: string | null }
+    cursor: { ok: boolean; version: string | null }
+    codex: { ok: boolean; version: string | null }
+    git: { ok: boolean; version: string | null }
+  }> => ipcRenderer.invoke('system-check'),
+
+  appCheckUpdates: (): Promise<{ status: string; error: string | null; version: string | null; percent: number }> =>
+    ipcRenderer.invoke('app-check-updates'),
+  appDownloadUpdate: (): Promise<{ status: string; error: string | null; version: string | null; percent: number }> =>
+    ipcRenderer.invoke('app-download-update'),
+  appInstallUpdate: (): Promise<void> => ipcRenderer.invoke('app-install-update'),
+  appGetUpdateStatus: (): Promise<{ status: string; error: string | null; version: string | null; percent: number }> =>
+    ipcRenderer.invoke('app-get-update-status'),
 
   // Session history
   sessionHistoryScan: (folderPath: string, folderName: string): Promise<ClaudeSessionInfo[]> =>
@@ -305,28 +377,117 @@ const api = {
     ipcRenderer.invoke('akeyless-update-cli'),
 
   // DB Workbench
-  dbListProducers: (type?: 'mysql' | 'mongo'): Promise<{
-    success: boolean; producers: any[]; error?: string;
-  }> => ipcRenderer.invoke('db-list-producers', type),
+  dbListProducers: (
+    type?: 'mysql' | 'mongo',
+    forceRefresh?: boolean,
+  ): Promise<{
+    success: boolean; producers: any[]; error?: string; stale?: boolean;
+  }> => ipcRenderer.invoke('db-list-producers', type, forceRefresh),
   dbConnect: (producerName: string): Promise<{
     success: boolean; connectionId?: string; tunnelId?: string;
-    cluster?: string; database?: string; type?: string; error?: string;
+    kgb?: string; dbName?: string; type?: string; error?: string;
   }> => ipcRenderer.invoke('db-connect', producerName),
   dbDisconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('db-disconnect', connectionId),
+  dbListConnections: (): Promise<{
+    success: boolean
+    connections: { id: string; host: string; port: number; user: string; database: string; connected: boolean }[]
+    error?: string
+  }> => ipcRenderer.invoke('db-list-connections'),
+  dbListSessions: (): Promise<{
+    success: boolean
+    sessions: { connectionId: string; tunnelId: string; kgb: string; dbName: string; producerName: string }[]
+    error?: string
+  }> => ipcRenderer.invoke('db-list-sessions'),
+  onDbIdleDisconnected: (callback: (payload: { connectionId: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { connectionId: string }) => callback(payload)
+    ipcRenderer.on('db-idle-disconnected', handler)
+    return () => ipcRenderer.removeListener('db-idle-disconnected', handler)
+  },
+  onDbTunnelClosed: (callback: (payload: { connectionId: string; reason: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { connectionId: string; reason: string }) =>
+      callback(payload)
+    ipcRenderer.on('db-tunnel-closed', handler)
+    return () => ipcRenderer.removeListener('db-tunnel-closed', handler)
+  },
   dbExecuteQuery: (connectionId: string, sql: string): Promise<{
     columns: any[]; rows: any[][]; rowCount: number;
     affectedRows: number; executionTimeMs: number; error?: string;
-  }> => ipcRenderer.invoke('db-execute-query', connectionId, sql),
-  dbListTables: (connectionId: string): Promise<{
+  }> => {
+    console.log(`[preload] dbExecuteQuery connection=${connectionId} sql=${sql.trim().slice(0, 80)}`)
+    return ipcRenderer.invoke('db-execute-query', connectionId, sql)
+  },
+  dbCancelQuery: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('db-cancel-query', connectionId),
+  dbReconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('db-reconnect', connectionId),
+  dbListTables: (connectionId: string, forceRefresh?: boolean): Promise<{
     success: boolean; tables: any[]; error?: string;
-  }> => ipcRenderer.invoke('db-list-tables', connectionId),
+  }> => ipcRenderer.invoke('db-list-tables', connectionId, forceRefresh),
   dbDescribeTable: (connectionId: string, tableName: string): Promise<{
     success: boolean; columns: any[]; error?: string;
   }> => ipcRenderer.invoke('db-describe-table', connectionId, tableName),
   dbListDatabases: (connectionId: string): Promise<{
     success: boolean; databases: string[]; error?: string;
   }> => ipcRenderer.invoke('db-list-databases', connectionId),
+
+  // Trino Workbench
+  trinoServerPresets: (): Promise<{
+    success: boolean; presets: { label: string; server: string }[];
+  }> => ipcRenderer.invoke('trino-server-presets'),
+  trinoConnect: (
+    connectionId: string,
+    server: string,
+    catalog: string,
+    schema: string,
+    user: string,
+    password: string,
+    savePassword?: boolean,
+  ): Promise<{
+    success: boolean
+    connectionId?: string
+    server?: string
+    catalog?: string
+    schema?: string
+    user?: string
+    error?: string
+    credentialWarning?: string
+  }> =>
+    ipcRenderer.invoke('trino-connect', connectionId, server, catalog, schema, user, password, savePassword),
+  trinoHasSavedCredential: (
+    server: string,
+    user: string,
+  ): Promise<{ success: boolean; hasCredential: boolean; error?: string }> =>
+    ipcRenderer.invoke('trino-has-saved-credential', server, user),
+  trinoDisconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('trino-disconnect', connectionId),
+  trinoListConnections: (): Promise<{
+    success: boolean
+    connections: { id: string; server: string; catalog: string; schema: string; user: string; connected: boolean }[]
+    error?: string
+  }> => ipcRenderer.invoke('trino-list-connections'),
+  trinoExecuteQuery: (connectionId: string, sql: string): Promise<{
+    columns: any[]; rows: any[][]; rowCount: number;
+    affectedRows: number; executionTimeMs: number; error?: string; truncated?: boolean;
+  }> => ipcRenderer.invoke('trino-execute-query', connectionId, sql),
+  trinoCancelQuery: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('trino-cancel-query', connectionId),
+  trinoListCatalogs: (connectionId: string): Promise<{
+    success: boolean; catalogs: string[]; error?: string;
+  }> => ipcRenderer.invoke('trino-list-catalogs', connectionId),
+  trinoListSchemas: (connectionId: string, catalog: string): Promise<{
+    success: boolean; schemas: string[]; error?: string;
+  }> => ipcRenderer.invoke('trino-list-schemas', connectionId, catalog),
+  trinoListTables: (connectionId: string, catalog?: string, schema?: string, nameFilter?: string): Promise<{
+    success: boolean; tables: any[]; error?: string;
+  }> => ipcRenderer.invoke('trino-list-tables', connectionId, catalog, schema, nameFilter),
+  trinoDescribeTable: (
+    connectionId: string,
+    tableName: string,
+    catalog?: string,
+    schema?: string,
+  ): Promise<{ success: boolean; columns: any[]; error?: string }> =>
+    ipcRenderer.invoke('trino-describe-table', connectionId, tableName, catalog, schema),
 }
 
 contextBridge.exposeInMainWorld('api', api)

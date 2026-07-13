@@ -1,58 +1,79 @@
-import { ipcMain, shell } from 'electron'
+import { ipcMain, shell, BrowserWindow, type WebContents } from 'electron'
 import { join } from 'path'
-import { readdirSync, statSync, mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs'
-import { execSync, exec } from 'child_process'
+import { readdir, stat } from 'fs/promises'
+import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs'
+import { execSync, exec, execFile } from 'child_process'
 import { promisify } from 'util'
 import { homedir } from 'os'
 import { WorkspaceFolder } from '../../shared/types'
+import {
+  buildGitFolderMeta,
+  buildGitSyncStatus,
+  getWorkingTreeChanges,
+  pullFolderToBase,
+  isSafeRefName,
+  type PullFolderOptions,
+} from '../git-sync'
+import { getCachedFolderMeta, setCachedFolderMeta, invalidateFolderMeta } from '../git-meta-cache'
 
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 export function registerGitHandlers() {
-  ipcMain.handle('list-workspace-folders', (_event, scanPath: string) => {
+  ipcMain.handle('list-workspace-folders', async (_event, scanPath: string) => {
     const folders: WorkspaceFolder[] = []
+    const STAT_BATCH = 32
     try {
-      const entries = readdirSync(scanPath)
-      for (const entry of entries) {
-        if (entry.startsWith('.') || entry === 'node_modules') continue
-        const fullPath = join(scanPath, entry)
-        try {
-          const stat = statSync(fullPath)
-          if (!stat.isDirectory()) continue
-          folders.push({
-            name: entry,
-            path: fullPath,
-            modifiedAt: stat.mtime.toISOString(),
-            gitBranch: null,
-            gitRemote: null
-          })
-        } catch { continue }
+      const entries = await readdir(scanPath)
+      const candidates = entries.filter(
+        (entry) => !entry.startsWith('.') && entry !== 'node_modules',
+      )
+      for (let i = 0; i < candidates.length; i += STAT_BATCH) {
+        const batch = candidates.slice(i, i + STAT_BATCH)
+        const batchResults = await Promise.all(
+          batch.map(async (entry) => {
+            const fullPath = join(scanPath, entry)
+            try {
+              const st = await stat(fullPath)
+              if (!st.isDirectory()) return null
+              return {
+                name: entry,
+                path: fullPath,
+                modifiedAt: st.mtime.toISOString(),
+                gitBranch: null,
+                gitRemote: null,
+              } satisfies WorkspaceFolder
+            } catch {
+              return null
+            }
+          }),
+        )
+        for (const item of batchResults) {
+          if (item) folders.push(item)
+        }
       }
     } catch { /* ignore */ }
     return folders.sort((a, b) => a.name.localeCompare(b.name))
   })
 
+  ipcMain.handle('get-folder-git-meta', async (_event, folderPath: string, fetch = false) => {
+    if (!fetch) {
+      const cached = getCachedFolderMeta(folderPath)
+      if (cached) return cached
+    }
+    const meta = await buildGitFolderMeta(folderPath, fetch)
+    setCachedFolderMeta(folderPath, meta)
+    return meta
+  })
+
   ipcMain.handle('get-git-info', async (_event, folderPath: string) => {
-    let gitBranch: string | null = null
-    let gitRemote: string | null = null
-    try {
-      const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 3000
-      })
-      gitBranch = branch.trim()
-      try {
-        const { stdout: remote } = await execAsync('git remote get-url origin', {
-          cwd: folderPath, encoding: 'utf-8', timeout: 3000
-        })
-        const r = remote.trim()
-        if (r.includes('github.com')) {
-          gitRemote = r.replace(/^git@github\.com:/, 'https://github.com/').replace(/\.git$/, '')
-        } else {
-          gitRemote = r
-        }
-      } catch { /* no remote */ }
-    } catch { /* not a git repo */ }
-    return { gitBranch, gitRemote }
+    const cached = getCachedFolderMeta(folderPath)
+    if (cached) {
+      return { gitBranch: cached.gitBranch, gitRemote: cached.gitRemote }
+    }
+    const meta = await buildGitFolderMeta(folderPath, false)
+    setCachedFolderMeta(folderPath, meta)
+    return { gitBranch: meta.gitBranch, gitRemote: meta.gitRemote }
   })
 
   ipcMain.handle('get-git-status', async (_event, folderPath: string) => {
@@ -141,8 +162,8 @@ export function registerGitHandlers() {
 
   ipcMain.handle('list-branches', async (_event, folderPath: string) => {
     try {
-      execSync('git rev-parse --is-inside-work-tree', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
+      await execAsync('git rev-parse --is-inside-work-tree', {
+        cwd: folderPath, encoding: 'utf-8', timeout: 3000,
       })
     } catch {
       return { current: null, branches: [] }
@@ -150,16 +171,18 @@ export function registerGitHandlers() {
 
     let current: string | null = null
     try {
-      current = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
-      }).trim()
+      const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', {
+        cwd: folderPath, encoding: 'utf-8', timeout: 3000,
+      })
+      current = stdout.trim()
     } catch { /* detached HEAD */ }
 
     const branches: string[] = []
     try {
-      const raw = execSync('git branch --format="%(refname:short)"', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore']
-      }).trim()
+      const { stdout } = await execAsync('git branch --format="%(refname:short)"', {
+        cwd: folderPath, encoding: 'utf-8', timeout: 5000,
+      })
+      const raw = stdout.trim()
       if (raw) {
         for (const b of raw.split('\n')) {
           const name = b.trim()
@@ -171,18 +194,114 @@ export function registerGitHandlers() {
     return { current, branches }
   })
 
+  ipcMain.handle('get-git-sync-status', async (_event, folderPath: string, fetch = false) => {
+    return buildGitSyncStatus(folderPath, fetch)
+  })
+
+  ipcMain.handle('get-folder-working-tree', async (_event, folderPath: string) => {
+    return getWorkingTreeChanges(folderPath)
+  })
+
+  ipcMain.handle(
+    'pull-folder-to-base',
+    async (_event, folderPath: string, options?: PullFolderOptions) => {
+      return pullFolderToBase(folderPath, options)
+    },
+  )
+
+  ipcMain.handle('pull-all-folders-to-base', async (_event, folderPaths: string[]) => {
+    const results: Array<{
+      path: string
+      success: boolean
+      error?: string
+      branch?: string | null
+    }> = []
+    for (const folderPath of folderPaths) {
+      const result = await pullFolderToBase(folderPath)
+      results.push({
+        path: folderPath,
+        success: result.success,
+        error: result.error,
+        branch: result.branch,
+      })
+    }
+    return results
+  })
+
+  function emitPullFinished(sender: WebContents, payload: {
+    path: string
+    success: boolean
+    error?: string
+    branch?: string | null
+  }) {
+    invalidateFolderMeta(payload.path)
+    const win = BrowserWindow.fromWebContents(sender)
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('git-pull-finished', payload)
+    }
+  }
+
+  function emitPullBatchFinished(sender: WebContents, payload: { total: number; ok: number; failed: number }) {
+    const win = BrowserWindow.fromWebContents(sender)
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('git-pull-batch-finished', payload)
+    }
+  }
+
+  ipcMain.handle(
+    'start-pull-folder-to-base',
+    (event, folderPath: string, options?: PullFolderOptions) => {
+    const sender = event.sender
+    void (async () => {
+      const result = await pullFolderToBase(folderPath, options)
+      emitPullFinished(sender, {
+        path: folderPath,
+        success: result.success,
+        error: result.error,
+        branch: result.branch,
+      })
+    })()
+    return { started: true }
+  })
+
+  ipcMain.handle('start-pull-all-folders-to-base', (event, folderPaths: string[]) => {
+    const sender = event.sender
+    const paths = [...folderPaths]
+    void (async () => {
+      let ok = 0
+      let failed = 0
+      for (const folderPath of paths) {
+        const result = await pullFolderToBase(folderPath)
+        if (result.success) ok++
+        else failed++
+        emitPullFinished(sender, {
+          path: folderPath,
+          success: result.success,
+          error: result.error,
+          branch: result.branch,
+        })
+      }
+      emitPullBatchFinished(sender, { total: paths.length, ok, failed })
+    })()
+    return { started: true, count: paths.length }
+  })
+
   ipcMain.handle('checkout-branch', async (_event, folderPath: string, branchName: string) => {
     try {
-      execSync('git rev-parse --is-inside-work-tree', {
-        cwd: folderPath, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore']
+      await execAsync('git rev-parse --is-inside-work-tree', {
+        cwd: folderPath, encoding: 'utf-8', timeout: 3000,
       })
     } catch {
       return { success: false, error: 'Not a git repository' }
     }
 
+    if (!isSafeRefName(branchName)) {
+      return { success: false, error: 'Invalid branch name' }
+    }
+
     try {
-      execSync(`git checkout "${branchName}"`, {
-        cwd: folderPath, encoding: 'utf-8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe']
+      await execFileAsync('git', ['checkout', branchName], {
+        cwd: folderPath, encoding: 'utf-8', timeout: 10000,
       })
       return { success: true }
     } catch (err: unknown) {
@@ -194,35 +313,30 @@ export function registerGitHandlers() {
     }
   })
 
-  ipcMain.handle('open-in-ide', (_event, projectPath: string, ide: 'cursor' | 'zed') => {
-    try {
-      if (ide === 'cursor') {
-        execSync(`cursor "${projectPath}"`, { stdio: 'ignore' })
-      } else {
-        execSync(`zed "${projectPath}"`, { stdio: 'ignore' })
-      }
-      return true
-    } catch {
+  ipcMain.handle('open-in-ide', async (_event, projectPath: string, ide: 'cursor' | 'zed') => {
+    const launch = async (cmd: string) => {
       try {
-        if (ide === 'cursor') {
-          execSync(`open -a "Cursor" "${projectPath}"`, { stdio: 'ignore' })
-        } else {
-          execSync(`open -a "Zed" "${projectPath}"`, { stdio: 'ignore' })
-        }
+        await execAsync(cmd, { timeout: 5000 })
         return true
       } catch {
         return false
       }
     }
+    if (ide === 'cursor') {
+      if (await launch(`cursor "${projectPath}"`)) return true
+      return launch(`open -a "Cursor" "${projectPath}"`)
+    }
+    if (await launch(`zed "${projectPath}"`)) return true
+    return launch(`open -a "Zed" "${projectPath}"`)
   })
 
   ipcMain.handle('open-in-finder', (_event, projectPath: string) => {
     shell.showItemInFolder(projectPath)
   })
 
-  ipcMain.handle('open-in-terminal', (_event, projectPath: string) => {
+  ipcMain.handle('open-in-terminal', async (_event, projectPath: string) => {
     try {
-      execSync(`open -a "Terminal" "${projectPath}"`, { stdio: 'ignore' })
+      await execAsync(`open -a "Terminal" "${projectPath}"`, { timeout: 5000 })
       return true
     } catch {
       return false

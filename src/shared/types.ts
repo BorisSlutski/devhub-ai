@@ -29,8 +29,15 @@ export interface AppState {
   chatInputEnabled?: boolean
   defaultModel?: string
   workspaceChosen?: boolean
-  activeTab?: 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access'
+  activeTab?: 'launchpad' | 'folders' | 'claude' | 'sessions' | 'agents' | 'db-access' | 'trino-access'
   selectedProjectId?: string | null
+  /** Absolute paths of starred folders on the All Folders tab */
+  favoriteFolderPaths?: string[]
+  foldersSortBy?: 'name' | 'recent'
+  usePtyDaemon?: boolean
+  setupWizardDismissed?: boolean
+  /** Absolute project paths where the user has approved running .devhub-ai/config.json setup scripts */
+  trustedSetupProjectPaths?: string[]
 }
 
 export interface ProcessStatus {

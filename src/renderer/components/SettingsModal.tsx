@@ -30,19 +30,22 @@ interface Props {
   dangerousMode: boolean
   chatInputEnabled: boolean
   defaultModel: string
-  onSave: (newPath: string, scanDepth: number, rtkEnabled: boolean, dangerousMode: boolean, chatInputEnabled: boolean, defaultModel: string) => void
+  usePtyDaemon?: boolean
+  onSave: (newPath: string, scanDepth: number, rtkEnabled: boolean, dangerousMode: boolean, chatInputEnabled: boolean, defaultModel: string, usePtyDaemon: boolean) => void
   onClose: () => void
 }
 
 const DEFAULT_SCAN_DEPTH = 50
 
-export function SettingsModal({ currentPath, currentScanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel, onSave, onClose }: Props) {
+export function SettingsModal({ currentPath, currentScanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel, usePtyDaemon = false, onSave, onClose }: Props) {
   const [path, setPath] = useState(currentPath)
   const [scanDepth, setScanDepth] = useState(currentScanDepth)
   const [rtk, setRtk] = useState(rtkEnabled)
   const [dangerous, setDangerous] = useState(dangerousMode)
   const [chatInput, setChatInput] = useState(chatInputEnabled)
   const [model, setModel] = useState(defaultModel)
+  const [ptyDaemon, setPtyDaemon] = useState(usePtyDaemon)
+  const [updateInfo, setUpdateInfo] = useState<{ status: string; version: string | null; error: string | null } | null>(null)
   const [dangerousConfirm, setDangerousConfirm] = useState('')
   const [showDangerousConfirm, setShowDangerousConfirm] = useState(false)
   const [rtkStatus, setRtkStatus] = useState<RtkStatus | null>(null)
@@ -92,8 +95,13 @@ export function SettingsModal({ currentPath, currentScanDepth, rtkEnabled, dange
 
   const handleSave = () => {
     if (path.trim()) {
-      onSave(path.trim(), scanDepth, rtk, dangerous, chatInput, model)
+      onSave(path.trim(), scanDepth, rtk, dangerous, chatInput, model, ptyDaemon)
     }
+  }
+
+  const handleCheckUpdates = async () => {
+    const status = await window.api.appCheckUpdates()
+    setUpdateInfo({ status: status.status, version: status.version, error: status.error })
   }
 
   const handleToggleDangerous = () => {
@@ -590,6 +598,24 @@ export function SettingsModal({ currentPath, currentScanDepth, rtkEnabled, dange
                 </button>
               </div>
             </div>
+          )}
+        </div>
+
+        <div style={{ marginBottom: 16, padding: 12, borderRadius: 8, border: '1px solid var(--border)' }}>
+          <h3 style={{ fontSize: 13, marginBottom: 8 }}>Advanced</h3>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={ptyDaemon} onChange={e => setPtyDaemon(e.target.checked)} />
+            Use PTY daemon (sessions survive app restart — restart required)
+          </label>
+        </div>
+
+        <div style={{ marginBottom: 16, padding: 12, borderRadius: 8, border: '1px solid var(--border)' }}>
+          <h3 style={{ fontSize: 13, marginBottom: 8 }}>Updates</h3>
+          <button type="button" className="btn btn-sm" onClick={handleCheckUpdates}>Check for updates</button>
+          {updateInfo && (
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+              {updateInfo.error || (updateInfo.version ? `Status: ${updateInfo.status} (${updateInfo.version})` : `Status: ${updateInfo.status}`)}
+            </p>
           )}
         </div>
 

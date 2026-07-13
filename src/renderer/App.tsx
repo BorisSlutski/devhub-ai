@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useAppState } from './hooks/useAppState'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import { useGridNavigation } from './hooks/useGridNavigation'
-import { useClaudeSessions } from './hooks/useClaudeSessions'
+import { useAgentSessions } from './hooks/useClaudeSessions'
 import { Sidebar } from './components/Sidebar'
 import { ProjectCard } from './components/ProjectCard'
 import { EditProjectModal } from './components/EditProjectModal'
@@ -12,16 +12,22 @@ import { ClaudeSessionsView } from './components/ClaudeSessionsView'
 import { NewSessionModal } from './components/NewSessionModal'
 import { ShortcutsHelp } from './components/ShortcutsHelp'
 import { SettingsModal } from './components/SettingsModal'
+import { CommandPalette, type PaletteAction } from './components/CommandPalette'
+import { SetupWizard } from './components/SetupWizard'
 import { Toast } from './components/Toast'
 import { AgentsView } from './components/AgentsView'
 import { DbWorkbenchView } from './components/DbWorkbenchView'
+import { TrinoWorkbenchView } from './components/TrinoWorkbenchView'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Skeleton } from './components/Skeleton'
 import { Project } from '../shared/types'
+import appIcon from '../../resources/icon.png'
 
-type TabId = 'launchpad' | 'folders' | 'claude' | 'agents' | 'db-access'
+type TabId = 'launchpad' | 'folders' | 'sessions' | 'agents' | 'db-access' | 'trino-access'
 
 export function App() {
+  const [activeTab, setActiveTab] = useState<TabId>('launchpad')
+
   const {
     state,
     statuses,
@@ -38,9 +44,7 @@ export function App() {
     bulkHideProjects,
     bulkRemoveProjects,
     refreshSystemPorts
-  } = useAppState()
-
-  const [activeTab, setActiveTab] = useState<TabId>('launchpad')
+  } = useAppState(activeTab)
   const [search, setSearch] = useState('')
   const [activeFilter, setActiveFilter] = useState('all')
   const [editingProject, setEditingProject] = useState<Project | null>(null)
@@ -52,13 +56,13 @@ export function App() {
     setWaitingClaudeIds(prev => (prev.length === ids.length && prev.every((v, i) => v === ids[i]) ? prev : ids))
   }, [])
 
-  // Hydrate activeTab + selectedProjectId once from persisted state
+  // Always launch on the first tab (Launchpad) — only restore the selected project, not
+  // whichever tab happened to be open when the app last closed.
   useEffect(() => {
     if (!loaded || hydratedRef.current) return
     hydratedRef.current = true
-    if (state.activeTab) setActiveTab(state.activeTab)
     if (state.selectedProjectId) setSelectedProjectId(state.selectedProjectId)
-  }, [loaded, state.activeTab, state.selectedProjectId])
+  }, [loaded, state.selectedProjectId])
 
   // Persist navigation state when it changes (after initial hydration)
   useEffect(() => {
@@ -71,6 +75,14 @@ export function App() {
   const [bulkMode, setBulkMode] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showCommandPalette, setShowCommandPalette] = useState(false)
+  const [showSetupWizard, setShowSetupWizard] = useState(false)
+
+  useEffect(() => {
+    if (loaded && !state.setupWizardDismissed) {
+      setShowSetupWizard(true)
+    }
+  }, [loaded, state.setupWizardDismissed])
   const [showNewSession, setShowNewSession] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null)
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
@@ -91,10 +103,11 @@ export function App() {
     resumeFromHistory: handleResumeFromHistory,
     closeSession: handleCloseClaudeSession,
     launchPreset: handleLaunchPreset,
-  } = useClaudeSessions({
+    updateSessionMeta: handleUpdateSessionMeta,
+  } = useAgentSessions({
     dangerousMode: state.dangerousMode ?? false,
     defaultModel: state.defaultModel,
-    onSessionActivated: () => setActiveTab('claude'),
+    onSessionActivated: () => setActiveTab('sessions'),
     onNewSessionModalClosed: () => setShowNewSession(false),
   })
 
@@ -113,8 +126,9 @@ export function App() {
     },
     onTab1: () => setActiveTab('launchpad'),
     onTab2: () => setActiveTab('folders'),
-    onTab3: () => setActiveTab('claude'),
+    onTab3: () => setActiveTab('sessions'),
     onTab4: () => setActiveTab('agents'),
+    onTab5: () => setActiveTab('db-access'),
     onEscape: () => {
       // Don't close modals if user is typing in an input inside the modal
       const active = document.activeElement as HTMLElement | null
@@ -123,6 +137,7 @@ export function App() {
         (active as HTMLElement).blur()
         return
       }
+      if (showCommandPalette) { setShowCommandPalette(false); return }
       if (showHelp) { setShowHelp(false); return }
       if (editingProject) { setEditingProject(null); return }
       if (bulkMode) { setBulkMode(false); setBulkSelection(new Set()); return }
@@ -131,6 +146,28 @@ export function App() {
     },
     onHelp: () => setShowHelp(true)
   })
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault()
+        setShowCommandPalette(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const paletteActions = useMemo((): PaletteAction[] => [
+    { id: 'tab-launchpad', label: 'Go to Launchpad', group: 'Navigation', run: () => setActiveTab('launchpad') },
+    { id: 'tab-folders', label: 'Go to All Folders', group: 'Navigation', run: () => setActiveTab('folders') },
+    { id: 'tab-sessions', label: 'Go to Sessions', group: 'Navigation', run: () => setActiveTab('sessions') },
+    { id: 'tab-db', label: 'Go to DB Access', group: 'Navigation', run: () => setActiveTab('db-access') },
+    { id: 'tab-trino', label: 'Go to Trino', group: 'Navigation', run: () => setActiveTab('trino-access') },
+    { id: 'new-session', label: 'New session', group: 'Sessions', keywords: 'terminal claude', run: () => { setActiveTab('sessions'); setShowNewSession(true) } },
+    { id: 'settings', label: 'Open Settings', group: 'App', run: () => setShowSettings(true) },
+    { id: 'help', label: 'Keyboard shortcuts', group: 'App', run: () => setShowHelp(true) },
+  ], [])
 
   // Branch state: { projectId -> { current, branches } }
   const [branchMap, setBranchMap] = useState<Map<string, { current: string | null; branches: string[] }>>(new Map())
@@ -309,6 +346,24 @@ export function App() {
     persist({ ...state, workspaceChosen: true })
   }, [state, persist])
 
+  const handleToggleFavoriteFolder = useCallback(
+    (path: string) => {
+      const current = state.favoriteFolderPaths ?? []
+      const next = current.includes(path)
+        ? current.filter((p) => p !== path)
+        : [...current, path]
+      persist({ ...state, favoriteFolderPaths: next })
+    },
+    [state, persist],
+  )
+
+  const handleFoldersSortByChange = useCallback(
+    (foldersSortBy: 'name' | 'recent') => {
+      persist({ ...state, foldersSortBy })
+    },
+    [state, persist],
+  )
+
   if (!loaded) {
     return (
       <div className="skeleton-app-loading">
@@ -352,8 +407,9 @@ export function App() {
         height: '100vh', background: 'var(--bg-primary)', color: 'var(--text-primary)',
         padding: 40, textAlign: 'center', gap: 24,
       }}>
-        <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em' }}>
-          <span style={{ opacity: 0.4, marginRight: 8 }}>DHAI</span>DevHub-AI
+        <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <img src={appIcon} alt="" width={40} height={40} style={{ borderRadius: 10 }} />
+          DevHub-AI
         </div>
         <p style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 420, lineHeight: 1.6 }}>
           Choose the root folder that contains your projects.
@@ -391,7 +447,7 @@ export function App() {
   return (
     <>
       <div className="titlebar">
-        <span className="titlebar-logo">DHAI</span>
+        <img src={appIcon} alt="" className="titlebar-logo" />
         DevHub-AI
         <div className="theme-switcher">
           <button className={`theme-btn ${theme === 'light' ? 'active' : ''}`} onClick={() => setTheme('light')} title="Light mode">☀</button>
@@ -426,11 +482,11 @@ export function App() {
           All Folders
         </div>
         <div
-          className={`tab ${activeTab === 'claude' ? 'active' : ''}`}
-          onClick={() => setActiveTab('claude')}
+          className={`tab ${activeTab === 'sessions' ? 'active' : ''}`}
+          onClick={() => setActiveTab('sessions')}
           title={waitingClaudeIds.length > 0 ? `${waitingClaudeIds.length} session(s) waiting for input` : undefined}
         >
-          Claude
+          Sessions
           {waitingClaudeIds.length > 0 && (
             <span
               className="tab-waiting-dot"
@@ -455,25 +511,45 @@ export function App() {
         >
           DB Access
         </div>
+        <div
+          className={`tab ${activeTab === 'trino-access' ? 'active' : ''}`}
+          onClick={() => setActiveTab('trino-access')}
+        >
+          Trino
+        </div>
       </div>
 
-      {/* DB Access is always mounted so connection state survives tab switches */}
-      <div style={{
-        display: activeTab === 'db-access' ? 'flex' : 'none',
-        flex: 1,
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}>
+      <div
+        style={{
+          display: activeTab === 'db-access' ? 'flex' : 'none',
+          flex: 1,
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
         <ErrorBoundary name="DB Access">
           <DbWorkbenchView />
         </ErrorBoundary>
       </div>
 
-      {activeTab === 'db-access' ? null : activeTab === 'agents' ? (
+      <div
+        style={{
+          display: activeTab === 'trino-access' ? 'flex' : 'none',
+          flex: 1,
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <ErrorBoundary name="Trino">
+          <TrinoWorkbenchView />
+        </ErrorBoundary>
+      </div>
+
+      {activeTab === 'db-access' || activeTab === 'trino-access' ? null : activeTab === 'agents' ? (
         <ErrorBoundary name="Agents">
           <AgentsView />
         </ErrorBoundary>
-      ) : activeTab === 'claude' ? (
+      ) : activeTab === 'sessions' ? (
         <ErrorBoundary name="Claude Sessions">
           <ClaudeSessionsView
             sessions={claudeSessions}
@@ -487,6 +563,7 @@ export function App() {
             onResumeFromHistory={handleResumeFromHistory}
             onOpenPipelineSession={handleOpenPipelineSession}
             onLaunchPreset={handleLaunchPreset}
+            onUpdateSessionMeta={handleUpdateSessionMeta}
             onWaitingSessionsChange={handleWaitingSessionsChange}
           />
         </ErrorBoundary>
@@ -494,8 +571,12 @@ export function App() {
         <ErrorBoundary name="Folders">
           <FoldersView
             scanPath={state.scanPath}
-            onStartClaudeSession={(folder, useWorktree) => {
-              handleStartClaudeSession(folder, useWorktree)
+            favoriteFolderPaths={state.favoriteFolderPaths}
+            foldersSortBy={state.foldersSortBy ?? 'name'}
+            onToggleFavorite={handleToggleFavoriteFolder}
+            onFoldersSortByChange={handleFoldersSortByChange}
+            onStartSession={(folder, useWorktree, provider) => {
+              handleStartClaudeSession(folder, useWorktree, provider)
             }}
           />
         </ErrorBoundary>
@@ -624,6 +705,17 @@ export function App() {
 
       {showHelp && <ShortcutsHelp onClose={() => setShowHelp(false)} />}
 
+      {showCommandPalette && (
+        <CommandPalette actions={paletteActions} onClose={() => setShowCommandPalette(false)} />
+      )}
+
+      {showSetupWizard && (
+        <SetupWizard onDismiss={() => {
+          setShowSetupWizard(false)
+          persist({ ...state, setupWizardDismissed: true })
+        }} />
+      )}
+
       {showSettings && (
         <SettingsModal
           currentPath={state.scanPath}
@@ -632,8 +724,9 @@ export function App() {
           dangerousMode={state.dangerousMode ?? false}
           chatInputEnabled={state.chatInputEnabled ?? true}
           defaultModel={state.defaultModel ?? ''}
-          onSave={(newPath, scanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel) => {
-            persist({ ...state, scanPath: newPath, scanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel })
+          usePtyDaemon={state.usePtyDaemon ?? false}
+          onSave={(newPath, scanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel, usePtyDaemon) => {
+            persist({ ...state, scanPath: newPath, scanDepth, rtkEnabled, dangerousMode, chatInputEnabled, defaultModel, usePtyDaemon })
             setShowSettings(false)
           }}
           onClose={() => setShowSettings(false)}

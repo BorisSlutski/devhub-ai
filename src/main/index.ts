@@ -2,10 +2,13 @@
 process.stdout?.on?.('error', () => {})
 process.stderr?.on?.('error', () => {})
 
-import { app, BrowserWindow, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
+import { applyMacDockIcon, resolveAppIconPath } from './app-icon'
 import { join } from 'path'
 import { processManager, getShellPath } from './process-manager'
 import { ptyManager } from './pty-manager'
+import { initPtyBackend, attachPtyHooks, isPtyDaemonEnabled } from './pty-backend'
+import { initAutoUpdater } from './updater'
 import { ScrollbackReader } from './scrollback-manager'
 import { startBrowserBridge, setBrowserBridgeWindow, stopBrowserBridge } from './browser-bridge'
 import { pipelineManager } from './pipeline-manager'
@@ -36,15 +39,17 @@ import {
   registerPresetHandlers,
   registerAkeylessHandlers,
   registerDbWorkbenchHandlers,
+  registerTrinoWorkbenchHandlers,
   registerSummaryHandlers,
 } from './handlers'
 import { resourceMonitor } from './resource-monitor'
+import { setDbIdleMainWindow } from './db-connection-idle'
+import { setAkeylessDbMainWindow } from './akeyless-db'
 
 let mainWindow: BrowserWindow | null = null
 
 async function createWindow() {
-  const iconPng = join(__dirname, '../../resources/icon.png')
-  const iconIcns = join(__dirname, '../../resources/icon.icns')
+  const iconPng = resolveAppIconPath('png')
 
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -61,69 +66,60 @@ async function createWindow() {
     }
   })
 
-  if (process.platform === 'darwin') {
-    try {
-      let icon = nativeImage.createFromPath(iconPng)
-      if (icon.isEmpty()) {
-        icon = nativeImage.createFromPath(iconIcns)
-      }
-      if (!icon.isEmpty()) {
-        app.dock.setIcon(icon)
-      }
-    } catch { /* ignore */ }
-  }
+  mainWindow.maximize()
 
   processManager.setMainWindow(mainWindow)
+  const shellPath = getShellPath()
   ptyManager.setMainWindow(mainWindow)
-  ptyManager.setShellPath(getShellPath())
+  ptyManager.setShellPath(shellPath)
+  if (isPtyDaemonEnabled()) {
+    await initPtyBackend(mainWindow, shellPath)
+  }
   setBrowserBridgeWindow(mainWindow)
   pipelineManager.setMainWindow(mainWindow)
   pipelineManager.loadConfigs()
   pipelineManager.loadRuns()
   loadEnhancerConfig()
   setSessionMainWindow(mainWindow)
+  setDbIdleMainWindow(mainWindow)
+  setAkeylessDbMainWindow(mainWindow)
   workspaceInitTracker.setMainWindow(mainWindow)
   notificationManager.setMainWindow(mainWindow)
-  ptyManager.onData((sessionId, data) => promptEnhancer.feedContext(sessionId, data))
 
-  // Idle detection for desktop notifications
-  // Mirrors the 8s idle logic in XTerminal, but runs in the main process
+  // Idle detection for desktop notifications (mirrors XTerminal 8s idle)
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const sessionWaiting = new Set<string>()
 
-  ptyManager.onData((sessionId) => {
-    // Any data means the session is active — reset idle timer
-    if (sessionWaiting.has(sessionId)) {
+  attachPtyHooks(
+    (sessionId, data) => {
+      promptEnhancer.feedContext(sessionId, data)
+      if (sessionWaiting.has(sessionId)) sessionWaiting.delete(sessionId)
+      const existing = idleTimers.get(sessionId)
+      if (existing) clearTimeout(existing)
+      idleTimers.set(sessionId, setTimeout(() => {
+        if (!sessionWaiting.has(sessionId)) {
+          sessionWaiting.add(sessionId)
+          notificationManager.notifySessionComplete(sessionId)
+        }
+      }, 8000))
+    },
+    (sessionId) => {
+      const timer = idleTimers.get(sessionId)
+      if (timer) clearTimeout(timer)
+      idleTimers.delete(sessionId)
       sessionWaiting.delete(sessionId)
+      notificationManager.untrackSession(sessionId)
+      statuslineWatcher.unwatchSession(sessionId)
     }
-    const existing = idleTimers.get(sessionId)
-    if (existing) clearTimeout(existing)
+  )
 
-    idleTimers.set(sessionId, setTimeout(() => {
-      if (!sessionWaiting.has(sessionId)) {
-        sessionWaiting.add(sessionId)
-        notificationManager.notifySessionComplete(sessionId)
-      }
-    }, 8000))
-  })
-
-  ptyManager.onExit((sessionId) => {
-    const timer = idleTimers.get(sessionId)
-    if (timer) clearTimeout(timer)
-    idleTimers.delete(sessionId)
-    sessionWaiting.delete(sessionId)
-    notificationManager.untrackSession(sessionId)
-  })
-
-  // Statusline: deploy script, inject settings, watch sessions
   statuslineWatcher.setMainWindow(mainWindow)
   statuslineWatcher.setup()
-  ptyManager.onExit((sessionId) => statuslineWatcher.unwatchSession(sessionId))
+  initAutoUpdater()
 
   await startBrowserBridge()
 
-  // Start resource monitor and toggle idle mode on focus/blur
-  resourceMonitor.start(3000)
+  // Resource monitor polls only while a renderer client is subscribed (see resources handler)
   mainWindow.on('focus', () => resourceMonitor.setIdle(false))
   mainWindow.on('blur', () => resourceMonitor.setIdle(true))
 
@@ -182,10 +178,15 @@ function setupIPC() {
   registerPresetHandlers()
   registerAkeylessHandlers()
   registerDbWorkbenchHandlers()
+  registerTrinoWorkbenchHandlers()
   registerSummaryHandlers()
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin') {
+    app.setName('DevHub-AI')
+    applyMacDockIcon()
+  }
   setupIPC()
   createWindow()
 
@@ -205,6 +206,10 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  try {
+    const { flushSaveStateSync } = require('./store')
+    flushSaveStateSync()
+  } catch { /* store may not be loaded */ }
   resourceMonitor.stop()
   processManager.stopAll()
   ptyManager.destroyAll()
@@ -215,7 +220,9 @@ app.on('before-quit', () => {
   try {
     const { mysqlClient } = require('./mysql-client')
     const { akeylessDb } = require('./akeyless-db')
+    const { trinoClient } = require('./trino-client')
     mysqlClient.disconnectAll().catch(() => {})
     akeylessDb.closeAllTunnels()
+    trinoClient.disconnectAll().catch(() => {})
   } catch { /* modules may not be loaded yet */ }
 })

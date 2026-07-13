@@ -18,8 +18,10 @@
 }
 
 .titlebar-logo {
-  font-size: 14px;
-  color: var(--accent);
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 
 .titlebar-shortcut-hint {

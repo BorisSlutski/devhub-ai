@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import type { SessionPreset, SessionPresetCreate } from '../../../shared/ipc-types'
 import type { WorkspaceFolder } from '../../../shared/types'
+import { SESSION_ACCENT_COLORS } from '../../../shared/session-ui'
 
 interface Props {
   preset?: SessionPreset | null
@@ -35,6 +36,12 @@ export function PresetEditor({ preset, scanPath, onSave, onClose, prefill }: Pro
     (preset?.initialCommands || prefill?.initialCommands || []).join('\n')
   )
   const [pinned, setPinned] = useState(preset?.pinned ?? prefill?.pinned ?? false)
+  const [nickname, setNickname] = useState(preset?.nickname || prefill?.nickname || '')
+  const [accentColor, setAccentColor] = useState(preset?.accentColor || prefill?.accentColor || 'blue')
+  const [claudeArgs, setClaudeArgs] = useState(preset?.claudeArgs || prefill?.claudeArgs || '')
+  const [envVarsText, setEnvVarsText] = useState(
+    Object.entries(preset?.envVars || prefill?.envVars || {}).map(([k, v]) => `${k}=${v}`).join('\n')
+  )
 
   const [folders, setFolders] = useState<WorkspaceFolder[]>([])
   const [folderSearch, setFolderSearch] = useState('')
@@ -66,6 +73,13 @@ export function PresetEditor({ preset, scanPath, onSave, onClose, prefill }: Pro
       .split('\n')
       .map(c => c.trim())
       .filter(c => c.length > 0)
+    const envVars: Record<string, string> = {}
+    for (const line of envVarsText.split('\n')) {
+      const t = line.trim()
+      if (!t || !t.includes('=')) continue
+      const eq = t.indexOf('=')
+      envVars[t.slice(0, eq).trim()] = t.slice(eq + 1).trim()
+    }
     onSave({
       name: name.trim(),
       icon: icon || undefined,
@@ -76,6 +90,10 @@ export function PresetEditor({ preset, scanPath, onSave, onClose, prefill }: Pro
       model: model || undefined,
       initialCommands: cmds.length > 0 ? cmds : undefined,
       pinned,
+      nickname: nickname.trim() || undefined,
+      accentColor: accentColor || undefined,
+      claudeArgs: claudeArgs.trim() || undefined,
+      envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
     })
   }
 
@@ -113,6 +131,16 @@ export function PresetEditor({ preset, scanPath, onSave, onClose, prefill }: Pro
                 autoFocus
               />
               {errors.name && <span className="preset-error">{errors.name}</span>}
+            </div>
+            <div className="preset-field" style={{ width: 100 }}>
+              <label className="preset-label">Nickname</label>
+              <input className="preset-input" type="text" value={nickname} onChange={e => setNickname(e.target.value)} placeholder="Optional" />
+            </div>
+            <div className="preset-field" style={{ width: 90 }}>
+              <label className="preset-label">Color</label>
+              <select className="preset-input" value={accentColor} onChange={e => setAccentColor(e.target.value)}>
+                {SESSION_ACCENT_COLORS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
             </div>
             <div className="preset-field" style={{ width: 80 }}>
               <label className="preset-label">Icon</label>
@@ -195,6 +223,16 @@ export function PresetEditor({ preset, scanPath, onSave, onClose, prefill }: Pro
               <input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} />
               <span>Pin to quick-launch bar</span>
             </label>
+          </div>
+
+          <div className="preset-field">
+            <label className="preset-label">Claude extra args</label>
+            <input className="preset-input" type="text" value={claudeArgs} onChange={e => setClaudeArgs(e.target.value)} placeholder="e.g. --verbose" />
+          </div>
+
+          <div className="preset-field">
+            <label className="preset-label">Environment variables</label>
+            <textarea className="preset-input" rows={3} value={envVarsText} onChange={e => setEnvVarsText(e.target.value)} placeholder="KEY=value (one per line)" />
           </div>
 
           {/* Model */}

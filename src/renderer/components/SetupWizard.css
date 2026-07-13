@@ -1,0 +1,81 @@
+.setup-wizard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.setup-wizard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px 32px;
+  max-width: 480px;
+  width: 100%;
+}
+
+.setup-wizard h2 {
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+
+.setup-wizard-lead {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.setup-wizard-muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.setup-wizard-list {
+  list-style: none;
+  margin: 0 0 20px;
+  padding: 0;
+}
+
+.setup-wizard-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+}
+
+.setup-wizard-list li.ok {
+  border-color: var(--green);
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.setup-wizard-list li.fail {
+  border-color: var(--red);
+  background: rgba(248, 81, 73, 0.08);
+}
+
+.setup-wizard-list li.optional {
+  opacity: 0.85;
+}
+
+.setup-wizard-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.setup-wizard-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.setup-wizard-actions .btn-primary {
+  align-self: flex-start;
+}

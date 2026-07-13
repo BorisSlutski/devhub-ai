@@ -1,8 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { WorkspaceFolder } from '../../shared/types'
+import { normalizeAgentProvider, type AgentProvider } from '../../shared/agent-provider'
 
 export interface ClaudeSession {
   id: string
+  provider: AgentProvider
   folderName: string
   folderPath: string
   worktreePath: string | null
@@ -13,7 +15,11 @@ export interface ClaudeSession {
   pendingRecap?: boolean
   title?: string
   initializing?: boolean
+  nickname?: string
+  accentColor?: string
 }
+
+export type AgentSession = ClaudeSession
 
 interface UseClaudeSessionsOptions {
   dangerousMode: boolean
@@ -22,8 +28,8 @@ interface UseClaudeSessionsOptions {
   onNewSessionModalClosed?: () => void
 }
 
-function generateSessionId(): string {
-  return `claude-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`
+function generateSessionId(provider: AgentProvider = 'claude'): string {
+  return `${provider}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`
 }
 
 function detectClaudeId(
@@ -71,11 +77,13 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
       const restored: ClaudeSession[] = []
       for (const rec of saved) {
         try {
+          const provider = normalizeAgentProvider(rec.provider)
           const result = await window.api.ptyCreate({
             sessionId: rec.id,
             folderName: rec.folderName,
             folderPath: rec.folderPath,
             useWorktree: false,
+            provider,
             resumeClaudeId: rec.claudeSessionId || undefined,
             existingWorktreePath: rec.worktreePath || undefined,
             dangerousMode: rec.dangerousMode,
@@ -83,22 +91,27 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
           if (result.success) {
             restored.push({
               id: rec.id,
+              provider,
               folderName: result.folderName || rec.folderName,
               folderPath: rec.folderPath,
               worktreePath: result.worktreePath ?? rec.worktreePath,
               branchName: result.branchName ?? rec.branchName,
               claudeSessionId: rec.claudeSessionId ?? null,
               dangerousMode: rec.dangerousMode,
+              nickname: rec.nickname,
+              accentColor: rec.accentColor,
             })
-            // Refresh the active-session record (worktree/branch may have changed)
             window.api.activeSessionsSet({
               id: rec.id,
+              provider,
               claudeSessionId: rec.claudeSessionId,
               folderName: rec.folderName,
               folderPath: rec.folderPath,
               worktreePath: result.worktreePath ?? rec.worktreePath,
               branchName: result.branchName ?? rec.branchName,
               dangerousMode: rec.dangerousMode,
+              nickname: rec.nickname,
+              accentColor: rec.accentColor,
             })
           } else {
             window.api.activeSessionsRemove(rec.id)
@@ -122,13 +135,18 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
     return unsub
   }, [])
 
-  const startSession = useCallback(async (folder: WorkspaceFolder, useWorktree: boolean) => {
-    const sessionId = `claude-${Date.now().toString(36)}`
+  const startSession = useCallback(async (
+    folder: WorkspaceFolder,
+    useWorktree: boolean,
+    provider: AgentProvider = 'claude',
+  ) => {
+    const sessionId = generateSessionId(provider)
     const isDangerous = dangerousMode
 
     // Add session immediately in initializing state so the UI shows progress
     const placeholderSession: ClaudeSession = {
       id: sessionId,
+      provider,
       folderName: folder.name,
       folderPath: folder.path,
       worktreePath: null,
@@ -147,6 +165,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
         folderName: folder.name,
         folderPath: folder.path,
         useWorktree,
+        provider,
         dangerousMode: isDangerous,
         model: defaultModel || undefined,
       })
@@ -167,6 +186,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
 
         window.api.activeSessionsSet({
           id: sessionId,
+          provider,
           claudeSessionId: null,
           folderName: result.folderName || folder.name,
           folderPath: folder.path,
@@ -175,7 +195,9 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
           dangerousMode: isDangerous,
         })
 
-        detectClaudeId(sessionId, result.worktreePath || folder.path, null, setSessions)
+        if (provider === 'claude') {
+          detectClaudeId(sessionId, result.worktreePath || folder.path, null, setSessions)
+        }
       } else {
         // Remove the placeholder session on failure
         setSessions(prev => prev.filter(s => s.id !== sessionId))
@@ -194,13 +216,15 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
     const session = sessions.find(s => s.id === sessionId)
     if (!session || !session.claudeSessionId) return
 
-    const newPtyId = `claude-${Date.now().toString(36)}`
+    const provider = session.provider ?? 'claude'
+    const newPtyId = generateSessionId(provider)
     try {
       const result = await window.api.ptyCreate({
         sessionId: newPtyId,
         folderName: session.folderName,
         folderPath: session.folderPath,
         useWorktree: false,
+        provider,
         resumeClaudeId: session.claudeSessionId,
         existingWorktreePath: session.worktreePath || undefined,
         dangerousMode: session.dangerousMode
@@ -215,6 +239,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
         window.api.activeSessionsRemove(sessionId)
         window.api.activeSessionsSet({
           id: newPtyId,
+          provider,
           claudeSessionId: session.claudeSessionId,
           folderName: session.folderName,
           folderPath: session.folderPath,
@@ -223,7 +248,9 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
           dangerousMode: session.dangerousMode,
         })
 
-        detectClaudeId(newPtyId, session.worktreePath || session.folderPath, session.claudeSessionId, setSessions)
+        if (provider === 'claude') {
+          detectClaudeId(newPtyId, session.worktreePath || session.folderPath, session.claudeSessionId, setSessions)
+        }
       } else {
         alert(`Failed to resume session: ${result.error}`)
       }
@@ -233,7 +260,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
   }, [sessions])
 
   const openPipelineSession = useCallback(async (pipelineFolderName: string, pipelineFolderPath: string, worktreePath: string) => {
-    const sessionId = `claude-${Date.now().toString(36)}`
+    const sessionId = generateSessionId('claude')
     const isDangerous = dangerousMode
     try {
       const result = await window.api.ptyCreate({
@@ -241,12 +268,14 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
         folderName: pipelineFolderName,
         folderPath: pipelineFolderPath,
         useWorktree: false,
+        provider: 'claude',
         existingWorktreePath: worktreePath,
         dangerousMode: isDangerous
       })
       if (result.success) {
         const newSession: ClaudeSession = {
           id: sessionId,
+          provider: 'claude',
           folderName: result.folderName || pipelineFolderName,
           folderPath: pipelineFolderPath,
           worktreePath: result.worktreePath ?? worktreePath,
@@ -260,6 +289,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
 
         window.api.activeSessionsSet({
           id: sessionId,
+          provider: 'claude',
           claudeSessionId: null,
           folderName: newSession.folderName,
           folderPath: newSession.folderPath,
@@ -278,7 +308,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
   const resumeFromHistory = useCallback(async (claudeSessionId: string, folderName: string, folderPath: string, worktreePath?: string | null) => {
     if (sessions.some(s => s.claudeSessionId === claudeSessionId && !s.exited)) return
 
-    const newId = `claude-${Date.now().toString(36)}`
+    const newId = generateSessionId('claude')
     const isDangerous = dangerousMode
     try {
       const result = await window.api.ptyCreate({
@@ -286,6 +316,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
         folderName,
         folderPath,
         useWorktree: false,
+        provider: 'claude',
         resumeClaudeId: claudeSessionId,
         existingWorktreePath: worktreePath || undefined,
         dangerousMode: isDangerous,
@@ -293,6 +324,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
       if (result.success) {
         const newSession: ClaudeSession = {
           id: newId,
+          provider: 'claude',
           folderName: result.folderName || folderName,
           folderPath,
           worktreePath: result.worktreePath ?? worktreePath ?? null,
@@ -307,6 +339,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
 
         window.api.activeSessionsSet({
           id: newId,
+          provider: 'claude',
           claudeSessionId,
           folderName,
           folderPath,
@@ -343,13 +376,14 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
   }, [sessions])
 
   const launchPreset = useCallback(async (presetId: string) => {
-    const sessionId = `claude-${Date.now().toString(36)}`
+    const sessionId = generateSessionId('claude')
     try {
       const result = await window.api.presetLaunch({ presetId, sessionId })
       if (result.success && result.preset) {
         const preset = result.preset
         const newSession: ClaudeSession = {
           id: sessionId,
+          provider: 'claude',
           folderName: result.folderName || preset.projectName,
           folderPath: preset.projectPath,
           worktreePath: result.worktreePath ?? null,
@@ -362,6 +396,7 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
 
         window.api.activeSessionsSet({
           id: sessionId,
+          provider: 'claude',
           claudeSessionId: null,
           folderName: newSession.folderName,
           folderPath: newSession.folderPath,
@@ -379,6 +414,28 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
     }
   }, [onSessionActivated])
 
+  const updateSessionMeta = useCallback((sessionId: string, meta: { nickname?: string; accentColor?: string }) => {
+    setSessions(prev => prev.map(s =>
+      s.id === sessionId ? { ...s, ...meta } : s
+    ))
+    window.api.activeSessionsUpdateMeta(sessionId, meta)
+    const session = sessions.find(s => s.id === sessionId)
+    if (session) {
+      window.api.activeSessionsSet({
+        id: sessionId,
+        provider: session.provider ?? 'claude',
+        claudeSessionId: session.claudeSessionId ?? null,
+        folderName: session.folderName,
+        folderPath: session.folderPath,
+        worktreePath: session.worktreePath,
+        branchName: session.branchName,
+        dangerousMode: session.dangerousMode,
+        nickname: meta.nickname ?? session.nickname,
+        accentColor: meta.accentColor ?? session.accentColor,
+      })
+    }
+  }, [sessions])
+
   return {
     sessions,
     lastCreatedSessionId,
@@ -388,5 +445,8 @@ export function useClaudeSessions({ dangerousMode, defaultModel, onSessionActiva
     resumeFromHistory,
     closeSession,
     launchPreset,
+    updateSessionMeta,
   }
 }
+
+export const useAgentSessions = useClaudeSessions

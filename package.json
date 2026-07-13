@@ -9,13 +9,19 @@
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
     "package": "bash scripts/package-mac.sh",
+    "icons": "bash scripts/generate-icons.sh",
+    "frame-icon": "swift scripts/frame-app-icon.swift",
+    "install-app": "bash scripts/install-app.sh",
+    "refresh-icon": "bash scripts/refresh-mac-icon.sh",
+    "verify-icon": "bash scripts/verify-mac-icon.sh",
     "install-dev": "bash scripts/install-dev.sh",
     "build:watch": "electron-vite build --watch",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "npx playwright test",
-    "postinstall": "electron-rebuild -f -w node-pty"
+    "postinstall": "electron-rebuild -f -w node-pty && (test -f resources/icon.icns || npm run icons) && bash scripts/patch-electron-dev-icon.sh",
+    "patch-dev-icon": "bash scripts/patch-electron-dev-icon.sh"
   },
   "dependencies": {
     "@codemirror/lang-sql": "^6.10.0",
@@ -24,7 +30,8 @@
     "@xterm/xterm": "^6.0.0",
     "detect-port": "^1.6.1",
     "mysql2": "^3.19.1",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "trino-client": "^0.2.9"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",

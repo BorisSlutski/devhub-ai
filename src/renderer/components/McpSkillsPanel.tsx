@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
+import { importMcpDefinition } from '../../shared/mcp-import'
 import './McpSkillsPanel.css'
 
 interface McpServer {
@@ -29,6 +30,7 @@ interface Props {
 }
 
 type Tab = 'mcp' | 'skills'
+type AddMode = 'form' | 'json' | 'mcp-s'
 
 interface EditingServer {
   originalName: string
@@ -52,6 +54,14 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const [skillContent, setSkillContent] = useState<{ path: string; content: string } | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'ok' | 'error' | 'warning' | 'unknown'>>({})
+  const [addMode, setAddMode] = useState<AddMode | null>(null)
+  const [jsonScope, setJsonScope] = useState<'user' | 'project'>('user')
+  const [jsonContent, setJsonContent] = useState('')
+  const [jsonPath, setJsonPath] = useState('')
+  const [mcpSPaste, setMcpSPaste] = useState('')
+  const [mcpSPreview, setMcpSPreview] = useState<string | null>(null)
+  const [mcpSWarnings, setMcpSWarnings] = useState<string[]>([])
+  const [mcpSMergeScope, setMcpSMergeScope] = useState<'user' | 'project'>('user')
 
   const refreshStatuses = useCallback(async () => {
     try {
@@ -99,6 +109,7 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
   )
 
   const handleEdit = useCallback((srv: typeof allServers[0]) => {
+    setAddMode('form')
     setEditing({
       originalName: srv.name,
       name: srv.name,
@@ -113,10 +124,15 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
     })
   }, [])
 
+  const getConfigPathForScope = useCallback((scope: 'user' | 'project') => {
+    return scope === 'user'
+      ? (configs.find(c => c.scope === 'user')?.path ?? '')
+      : (configs.find(c => c.scope === 'project')?.path ?? `${projectPath}/.mcp.json`)
+  }, [configs, projectPath])
+
   const handleAddNew = useCallback((scope: 'user' | 'project') => {
-    const configPath = scope === 'user'
-      ? configs.find(c => c.scope === 'user')?.path || '~/.claude.json'
-      : configs.find(c => c.scope === 'project')?.path || `${projectPath}/.mcp.json`
+    setAddMode('form')
+    const configPath = getConfigPathForScope(scope)
     setEditing({
       originalName: '',
       name: '',
@@ -129,7 +145,82 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
       configPath,
       isNew: true,
     })
-  }, [configs, projectPath])
+  }, [getConfigPathForScope])
+
+  const openJsonEditor = useCallback(async (scope: 'user' | 'project') => {
+    setAddMode('json')
+    setJsonScope(scope)
+    setEditing(null)
+    setSaveMsg(null)
+    const path = getConfigPathForScope(scope)
+    setJsonPath(path)
+    const result = await window.api.mcpReadRawFile(path)
+    if (result.success && result.content != null) {
+      setJsonContent(result.content)
+    } else {
+      setJsonContent('{\n  "mcpServers": {}\n}\n')
+      if (result.error) setSaveMsg(`Error: ${result.error}`)
+    }
+  }, [getConfigPathForScope])
+
+  const handleSaveJson = useCallback(async () => {
+    if (!jsonPath) return
+    setSaveMsg(null)
+    const result = await window.api.mcpSaveRawFile(jsonPath, jsonContent)
+    if (result.success) {
+      setSaveMsg('Saved')
+      setAddMode(null)
+      refresh()
+    } else {
+      setSaveMsg(`Error: ${result.error}`)
+    }
+  }, [jsonPath, jsonContent, refresh])
+
+  const openMcpSImport = useCallback(() => {
+    setAddMode('mcp-s')
+    setEditing(null)
+    setMcpSPaste('')
+    setMcpSPreview(null)
+    setMcpSWarnings([])
+    setSaveMsg(null)
+  }, [])
+
+  const handleMcpSPreview = useCallback(() => {
+    setSaveMsg(null)
+    try {
+      const { servers, warnings } = importMcpDefinition(mcpSPaste)
+      setMcpSPreview(JSON.stringify(servers, null, 2))
+      setMcpSWarnings(warnings)
+    } catch (err) {
+      setMcpSPreview(null)
+      setMcpSWarnings([])
+      setSaveMsg(`Error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }, [mcpSPaste])
+
+  const handleMcpSImport = useCallback(async () => {
+    setSaveMsg(null)
+    try {
+      const { servers, warnings } = importMcpDefinition(mcpSPaste)
+      const path = getConfigPathForScope(mcpSMergeScope)
+      const result = await window.api.mcpMergeServers(path, servers, 'merge')
+      if (result.success) {
+        setSaveMsg(warnings.length ? `Saved (${warnings.join('; ')})` : 'Imported')
+        setAddMode(null)
+        refresh()
+      } else {
+        setSaveMsg(`Error: ${result.error}`)
+      }
+    } catch (err) {
+      setSaveMsg(`Error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }, [mcpSPaste, mcpSMergeScope, getConfigPathForScope, refresh])
+
+  const cancelAddMode = useCallback(() => {
+    setAddMode(null)
+    setMcpSPreview(null)
+    setSaveMsg(null)
+  }, [])
 
   const handleSave = useCallback(async () => {
     if (!editing || !editing.name.trim()) return
@@ -166,6 +257,7 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
     if (result.success) {
       setSaveMsg('Saved')
       setEditing(null)
+      setAddMode(null)
       refresh()
     } else {
       setSaveMsg(`Error: ${result.error}`)
@@ -200,7 +292,7 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
         <div className="mcp-panel-tabs">
           <button
             className={`mcp-panel-tab ${tab === 'mcp' ? 'active' : ''}`}
-            onClick={() => { setTab('mcp'); setEditing(null); setSkillContent(null) }}
+            onClick={() => { setTab('mcp'); setEditing(null); setSkillContent(null); setAddMode(null) }}
           >
             MCP Servers
           </button>
@@ -218,7 +310,44 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
         <div className="mcp-empty">Loading...</div>
       ) : tab === 'mcp' ? (
         <div className="mcp-content">
-          {editing ? (
+          {addMode === 'json' ? (
+            <div className="mcp-editor">
+              <div className="mcp-editor-title">Edit MCP JSON</div>
+              <label className="mcp-label">Config file</label>
+              <div className="mcp-type-switch">
+                <button type="button" className={`mcp-type-btn ${jsonScope === 'user' ? 'active' : ''}`} onClick={() => openJsonEditor('user')}>User (~/.claude.json)</button>
+                <button type="button" className={`mcp-type-btn ${jsonScope === 'project' ? 'active' : ''}`} onClick={() => openJsonEditor('project')}>Project (.mcp.json)</button>
+              </div>
+              {jsonPath ? <div className="mcp-json-path" title={jsonPath}>{jsonPath}</div> : null}
+              <textarea className="mcp-input mcp-json-editor" value={jsonContent} onChange={(e) => setJsonContent(e.target.value)} spellCheck={false} />
+              <div className="mcp-editor-actions">
+                <button type="button" className="btn btn-sm" onClick={cancelAddMode}>Cancel</button>
+                <div style={{ flex: 1 }} />
+                <button type="button" className="btn btn-sm btn-primary" onClick={handleSaveJson}>Save JSON</button>
+              </div>
+              {saveMsg ? <div className={`mcp-save-msg ${saveMsg.startsWith('Error') ? 'error' : ''}`}>{saveMsg}</div> : null}
+            </div>
+          ) : addMode === 'mcp-s' ? (
+            <div className="mcp-editor">
+              <div className="mcp-editor-title">Import from MCP-S Connect</div>
+              <p className="mcp-hint">Paste a toolkit URL from <a href="https://mcp-s-connect.wewix.net/" target="_blank" rel="noreferrer">mcp-s-connect.wewix.net</a> (e.g. …/toolkits/you@wix.com:premium-de/view), a gateway URL, or JSON with mcpServers.</p>
+              <textarea className="mcp-input mcp-textarea" value={mcpSPaste} onChange={(e) => { setMcpSPaste(e.target.value); setMcpSPreview(null) }} placeholder="https://mcp-s-connect.wewix.net/toolkits/you@wix.com:premium-de/view" rows={4} />
+              <div className="mcp-editor-actions" style={{ marginTop: 8 }}><button type="button" className="btn btn-sm" onClick={handleMcpSPreview}>Preview</button></div>
+              {mcpSPreview ? (<><label className="mcp-label">Will add / merge</label><pre className="mcp-skill-content mcp-preview-json">{mcpSPreview}</pre></>) : null}
+              {mcpSWarnings.length > 0 ? <div className="mcp-save-msg">{mcpSWarnings.join('; ')}</div> : null}
+              <label className="mcp-label">Save into</label>
+              <div className="mcp-type-switch">
+                <button type="button" className={`mcp-type-btn ${mcpSMergeScope === 'user' ? 'active' : ''}`} onClick={() => setMcpSMergeScope('user')}>User</button>
+                <button type="button" className={`mcp-type-btn ${mcpSMergeScope === 'project' ? 'active' : ''}`} onClick={() => setMcpSMergeScope('project')}>Project</button>
+              </div>
+              <div className="mcp-editor-actions">
+                <button type="button" className="btn btn-sm" onClick={cancelAddMode}>Cancel</button>
+                <div style={{ flex: 1 }} />
+                <button type="button" className="btn btn-sm btn-primary" onClick={handleMcpSImport} disabled={!mcpSPaste.trim()}>Merge into config</button>
+              </div>
+              {saveMsg ? <div className={`mcp-save-msg ${saveMsg.startsWith('Error') ? 'error' : ''}`}>{saveMsg}</div> : null}
+            </div>
+          ) : editing ? (
             <div className="mcp-editor">
               <div className="mcp-editor-title">
                 {editing.isNew ? 'Add MCP Server' : `Edit: ${editing.originalName}`}
@@ -293,7 +422,7 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
                   <button className="btn btn-sm btn-danger" onClick={handleDelete}>Delete</button>
                 )}
                 <div style={{ flex: 1 }} />
-                <button className="btn btn-sm" onClick={() => setEditing(null)}>Cancel</button>
+                <button className="btn btn-sm" onClick={() => { setEditing(null); setAddMode(null) }}>Cancel</button>
                 <button
                   className="btn btn-sm btn-primary"
                   onClick={handleSave}
@@ -360,11 +489,17 @@ export function McpSkillsPanel({ projectPath, onClose }: Props) {
                   Refresh
                 </button>
                 <div style={{ flex: 1 }} />
-                <button className="btn btn-sm btn-primary" onClick={() => handleAddNew('project')}>
-                  + Project Server
+                <button type="button" className="btn btn-sm" onClick={() => openJsonEditor('user')}>
+                  Edit JSON
                 </button>
-                <button className="btn btn-sm" onClick={() => handleAddNew('user')}>
-                  + User Server
+                <button type="button" className="btn btn-sm" onClick={openMcpSImport}>
+                  MCP-S Connect
+                </button>
+                <button type="button" className="btn btn-sm btn-primary" onClick={() => handleAddNew('project')}>
+                  + Project
+                </button>
+                <button type="button" className="btn btn-sm" onClick={() => handleAddNew('user')}>
+                  + User
                 </button>
               </div>
             </>
