@@ -162,14 +162,26 @@ class TrinoClientManager {
     const generationAtStart = entry.generation
     entry.currentQueryId = null
     entry.cancelRequested = false
+    let cancelIssued = false
+    const issueQueryCancel = async () => {
+      if (cancelIssued) return
+      cancelIssued = true
+      await cancelInFlightQuery(entry)
+    }
 
     try {
       console.log(`[trino-client] query start id=${id} sql=${previewSql(sql)}`)
-      const iter = await withTimeout(
-        entry.client.query({ query: sql, user: entry.meta.user }),
-        Math.max(1, deadline - Date.now()),
-        `Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`,
-      )
+      let iter: AsyncIterator<unknown>
+      try {
+        iter = await withTimeout(
+          entry.client.query({ query: sql, user: entry.meta.user }),
+          Math.max(1, deadline - Date.now()),
+          `Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`,
+        )
+      } catch (queryErr) {
+        await issueQueryCancel()
+        throw queryErr
+      }
 
       const columns: ColumnDef[] = []
       const rows: any[][] = []
@@ -184,7 +196,7 @@ class TrinoClientManager {
         }
         const remaining = deadline - Date.now()
         if (remaining <= 0) {
-          await cancelInFlightQuery(entry)
+          await issueQueryCancel()
           throw new Error(`Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`)
         }
         let pageResult: IteratorResult<unknown>
@@ -195,7 +207,7 @@ class TrinoClientManager {
             `Query timed out after ${QUERY_TIMEOUT_MS / 1000}s`,
           )
         } catch (timeoutErr) {
-          await cancelInFlightQuery(entry)
+          await issueQueryCancel()
           throw timeoutErr
         }
         const page = pageResult.value as {
@@ -252,10 +264,6 @@ class TrinoClientManager {
     } catch (err: any) {
       const executionTimeMs = Math.round((performance.now() - start) * 100) / 100
       const msg = err?.message ?? String(err)
-      const timedOut = msg.includes('timed out')
-      if (timedOut) {
-        await cancelInFlightQuery(entry)
-      }
       console.error(
         `[trino-client] query failed id=${id} total=${executionTimeMs}ms sql=${previewSql(sql)} err=${msg}`,
       )

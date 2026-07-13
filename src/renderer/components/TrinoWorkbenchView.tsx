@@ -142,6 +142,7 @@ export function TrinoWorkbenchView() {
   const [presets, setPresets] = useState<{ label: string; server: string }[]>([])
   const [isConnecting, setIsConnecting] = useState(false)
   const [connectError, setConnectError] = useState<string | null>(null)
+  const [connectWarning, setConnectWarning] = useState<string | null>(null)
 
   const runQueryRef = useRef<(sessionId: string, sqlOverride?: string) => void>(() => {})
   const fetchTablesRef = useRef<(sessionId: string, forceRefresh?: boolean) => void>(() => {})
@@ -208,6 +209,7 @@ export function TrinoWorkbenchView() {
 
   const openConnectForm = useCallback(() => {
     setConnectError(null)
+    setConnectWarning(null)
     const last = loadLastConnection()
     const base = presets.length > 0 ? { ...EMPTY_FORM, server: presets[0].server } : EMPTY_FORM
     const next = last ? { ...base, ...last, password: '', savePassword: false } : base
@@ -232,6 +234,7 @@ export function TrinoWorkbenchView() {
       return
     }
     setConnectError(null)
+    setConnectWarning(null)
     setIsConnecting(true)
     const connectionId = `trino-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     try {
@@ -250,7 +253,7 @@ export function TrinoWorkbenchView() {
         return
       }
       if (res.credentialWarning) {
-        setConnectError(`Connected, but failed to save password: ${res.credentialWarning}`)
+        setConnectWarning(`Connected, but failed to save password: ${res.credentialWarning}`)
       }
       saveLastConnection({
         server: form.server.trim(),
@@ -613,6 +616,16 @@ export function TrinoWorkbenchView() {
             </div>
           )}
 
+          {connectWarning && (
+            <div
+              className="dbw-error-banner"
+              style={{ margin: '0 0 8px', background: 'rgba(234, 179, 8, 0.15)', borderColor: 'rgba(234, 179, 8, 0.4)' }}
+            >
+              <span className="dbw-error-icon">!</span>
+              <span>{connectWarning}</span>
+            </div>
+          )}
+
           <label className="dbw-picker-filter" style={{ display: 'block', marginBottom: 8 }}>
             <span>Server</span>
             <input
@@ -706,6 +719,18 @@ export function TrinoWorkbenchView() {
         </div>
 
         <div className="dbw-welcome">
+          {connectWarning && !showConnectForm && (
+            <div
+              className="dbw-error-banner"
+              style={{ background: 'rgba(234, 179, 8, 0.15)', borderColor: 'rgba(234, 179, 8, 0.4)' }}
+            >
+              <span className="dbw-error-icon">!</span>
+              <span>{connectWarning}</span>
+              <button className="dbw-error-dismiss" onClick={() => setConnectWarning(null)}>
+                Dismiss
+              </button>
+            </div>
+          )}
           {connectError && !showConnectForm && (
             <div className="dbw-error-banner">
               <span className="dbw-error-icon">!</span>
@@ -767,6 +792,19 @@ export function TrinoWorkbenchView() {
           )}
         </div>
       </div>
+
+      {connectWarning && (
+        <div
+          className="dbw-error-banner"
+          style={{ background: 'rgba(234, 179, 8, 0.15)', borderColor: 'rgba(234, 179, 8, 0.4)' }}
+        >
+          <span className="dbw-error-icon">!</span>
+          <span>{connectWarning}</span>
+          <button type="button" className="dbw-error-dismiss" onClick={() => setConnectWarning(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {connectError && (
         <div className="dbw-error-banner">

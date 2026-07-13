@@ -507,7 +507,7 @@ async function allocatePort(
 
 const PORT_BIND_ERROR_RE = /address already in use|eaddrinuse/i
 const MAX_TUNNEL_PORT_ATTEMPTS = 5
-const TUNNEL_BIND_PROBE_MS = 250
+const TUNNEL_BIND_PROBE_MS = 100
 
 function waitForTunnelBindFailure(child: ChildProcess, timeoutMs = TUNNEL_BIND_PROBE_MS): Promise<boolean> {
   return new Promise((resolve) => {
@@ -517,14 +517,16 @@ function waitForTunnelBindFailure(child: ChildProcess, timeoutMs = TUNNEL_BIND_P
       settled = true
       clearTimeout(timer)
       child.stderr?.off('data', onData)
+      child.off('exit', onExit)
       resolve(failed)
     }
     const onData = (buf: Buffer) => {
       if (PORT_BIND_ERROR_RE.test(buf.toString())) finish(true)
     }
+    const onExit = () => finish(true)
     child.stderr?.on('data', onData)
+    child.on('exit', onExit)
     const timer = setTimeout(() => finish(false), timeoutMs)
-    child.once('exit', () => finish(false))
   })
 }
 
