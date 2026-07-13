@@ -740,6 +740,7 @@ export async function openTunnel(producerName: string, preferredId?: string): Pr
         details,
         credentials,
         localPort,
+        attempt > 0,
       )
     } catch (err: any) {
       lastError = err instanceof Error ? err : new Error(String(err))
@@ -760,6 +761,7 @@ async function spawnTunnel(
   details: { host: string; dbName: string },
   credentials: DbCredentials,
   localPort: number,
+  probeBind = false,
 ): Promise<TunnelInfo> {
   const { kgb, producer } = parseProducerPath(producerName)
   const dbType = typeFromPath(producerName)
@@ -797,7 +799,7 @@ async function spawnTunnel(
     appendTunnelLog(tunnelId, buf.toString())
   })
 
-  const bindFailed = await waitForTunnelBindFailure(child)
+  const bindFailed = probeBind ? await waitForTunnelBindFailure(child) : false
   if (bindFailed) {
     try {
       child.kill('SIGTERM')

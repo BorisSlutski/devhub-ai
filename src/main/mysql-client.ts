@@ -142,6 +142,7 @@ async function queryWithTimeout(
   params?: unknown[],
   timeoutMs = QUERY_TIMEOUT_MS,
   onTimeout?: () => void,
+  killConn?: any,
 ): Promise<[unknown, unknown]> {
   let timer: ReturnType<typeof setTimeout> | undefined
   let timedOut = false
@@ -159,6 +160,7 @@ async function queryWithTimeout(
     ])) as [unknown, unknown]
   } catch (err) {
     if (timedOut) {
+      await killServerQuery(killConn, connection)
       onTimeout?.()
       try {
         connection.destroy()
@@ -169,6 +171,17 @@ async function queryWithTimeout(
     throw err
   } finally {
     if (timer) clearTimeout(timer)
+  }
+}
+
+/** Stop a timed-out query on the server (PyCharm/JDBC-style) using the sibling socket. */
+async function killServerQuery(killConn: any, victimConn: any): Promise<void> {
+  const threadId = victimConn?.threadId
+  if (!killConn || typeof threadId !== 'number') return
+  try {
+    await killConn.query(`KILL QUERY ${threadId}`)
+  } catch {
+    // best effort — tunnel may already be dead
   }
 }
 
@@ -521,9 +534,16 @@ class MysqlClient {
       if (useMetaSocket) {
         await this.ensureMetaReady(entry)
         ;[result, fields] = await this.withMetaLock(entry, () =>
-          queryWithTimeout(entry.metaConn, execSql, undefined, QUERY_TIMEOUT_MS, () => {
-            void this.replaceMetaConnection(entry)
-          }),
+          queryWithTimeout(
+            entry.metaConn,
+            execSql,
+            undefined,
+            QUERY_TIMEOUT_MS,
+            () => {
+              void this.replaceMetaConnection(entry)
+            },
+            entry.queryConn,
+          ),
         )
       } else {
         await this.ensureQueryReady(entry, id)
@@ -535,6 +555,7 @@ class MysqlClient {
           () => {
             void this.replaceQueryConnection(entry, id).catch(() => undefined)
           },
+          entry.metaConn,
         )
       }
       const queryMs = Math.round((performance.now() - queryStart) * 100) / 100

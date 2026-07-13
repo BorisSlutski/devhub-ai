@@ -43,7 +43,6 @@ interface QueryResult {
   tunnelOptimized?: boolean
 }
 
-const QUERY_CLIENT_TIMEOUT_MS = 95_000
 const CANCEL_CLIENT_TIMEOUT_MS = 30_000
 const TABLE_PREVIEW_LIMIT = 25
 /** Cap rendered result rows so tab switches stay fast with large result sets. */
@@ -1042,9 +1041,6 @@ export function DbWorkbenchView() {
       }
       const sql = `SELECT * FROM \`${tableName}\` LIMIT ${TABLE_PREVIEW_LIMIT};`
       patchSession(sessionId, { query: sql, expandedTable: tableName })
-      if (session) {
-        void fetchTableColumnsRef.current(sessionId, session.connectionId, tableName)
-      }
       void runQueryRef.current(sessionId, sql)
     },
     [patchSession, updateSessionWorkspace],
@@ -1102,15 +1098,7 @@ export function DbWorkbenchView() {
 
       startQueryElapsedTimer()
       try {
-        const res = await Promise.race([
-          window.api.dbExecuteQuery(connectionId, sql),
-          new Promise<QueryResult>((_, reject) => {
-            setTimeout(
-              () => reject(new Error(`Query timed out after ${QUERY_CLIENT_TIMEOUT_MS / 1000}s`)),
-              QUERY_CLIENT_TIMEOUT_MS,
-            )
-          }),
-        ])
+        const res = await window.api.dbExecuteQuery(connectionId, sql)
         if (runId !== queryRunIdRef.current) return
         stopQueryElapsedTimer()
         if (res.error) {

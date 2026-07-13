@@ -58,6 +58,26 @@ async function ensureDbConnection(connectionId: string): Promise<string | null> 
     registerDbConnection(connectionId)
   }
 
+  // Dead SSH forward with a live process is common after sleep/wake — skip MySQL reconnect
+  // attempts on an unreachable local port and reopen the tunnel immediately (DevDock parity).
+  if (!(await isLocalPortReachable(tunnel.localPort))) {
+    try {
+      console.log(
+        `[db-workbench] tunnel port ${tunnel.localPort} unreachable for ${connectionId}, reopening SSH…`,
+      )
+      const reopened = await akeylessDb.reopenTunnel(connectionId)
+      await waitForLocalPort(reopened.localPort)
+      tunnel = akeylessDb.getTunnel(connectionId)
+      if (!tunnel) {
+        return 'SSH tunnel failed to reopen. Try Reconnect or connect again.'
+      }
+      await reconnect(tunnel.credentials.user, tunnel.credentials.password, tunnel.localPort, tunnel.dbName)
+      return null
+    } catch (err: any) {
+      return err?.message ?? String(err)
+    }
+  }
+
   try {
     await reconnect(tunnel.credentials.user, tunnel.credentials.password, tunnel.localPort, tunnel.dbName)
     return null
@@ -103,6 +123,29 @@ async function ensureDbConnectionWithTimeout(connectionId: string): Promise<stri
   } catch (err: any) {
     return err?.message ?? String(err)
   }
+}
+
+/** Quick TCP probe — faster than a full MySQL reconnect on a dead SSH forward. */
+function isLocalPortReachable(port: number, timeoutMs = 2_000): Promise<boolean> {
+  const started = Date.now()
+  return new Promise((resolve) => {
+    const probe = () => {
+      const sock = createConnection({ host: '127.0.0.1', port }, () => {
+        sock.destroy()
+        resolve(true)
+      })
+      sock.on('error', () => {
+        sock.destroy()
+        if (Date.now() - started >= timeoutMs) {
+          resolve(false)
+          return
+        }
+        setTimeout(probe, 200)
+      })
+    }
+    probe()
+    setTimeout(() => resolve(false), timeoutMs)
+  })
 }
 
 /** Wait until the SSH local forward accepts TCP (replaces fixed 8s sleep). */
